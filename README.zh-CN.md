@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="logo.svg" width="48" height="48" alt="CodeIsland Logo" valign="middle">&nbsp;
+  <img src="logo.png" width="48" height="48" alt="CodeIsland Logo" valign="middle">&nbsp;
   CodeIsland
 </h1>
 <p align="center">
