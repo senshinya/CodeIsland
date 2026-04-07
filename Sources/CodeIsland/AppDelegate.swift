@@ -18,14 +18,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ProcessInfo.processInfo.disableSuddenTermination()
         // Pre-set app icon so Dock/menu bar use the packaged bundle icon.
         NSApp.applicationIconImage = SettingsWindowController.bundleAppIcon()
+        // Start HookServer BEFORE installing hooks into CLI configs.
+        // If we write settings.json first, Claude Code picks up the new hooks
+        // immediately but the socket isn't listening yet — PermissionRequest
+        // hooks get no response and Claude Code denies them.
+        hookServer = HookServer(appState: appState)
+        hookServer?.start()
+
         if ConfigInstaller.install() {
             Self.log.info("Hooks installed")
         } else {
             Self.log.warning("Failed to install hooks")
         }
-
-        hookServer = HookServer(appState: appState)
-        hookServer?.start()
 
         panelController = PanelWindowController(appState: appState)
         panelController?.showPanel()
