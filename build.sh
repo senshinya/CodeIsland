@@ -43,17 +43,28 @@ xcrun actool \
     "$ICON_CATALOG" \
     "$ICON_SOURCE"
 
-# Copy SPM resource bundles — place at .app root where Bundle.module expects them
+# Copy SPM resource bundles into Contents/Resources/ (required for code signing)
 for bundle in .build/*/release/*.bundle; do
     if [ -e "$bundle" ]; then
-        cp -R "$bundle" "$APP_BUNDLE/"
+        cp -R "$bundle" "$APP_BUNDLE/Contents/Resources/"
         break
     fi
 done
 
-echo "Ad-hoc code signing..."
-codesign --force --sign - "$APP_BUNDLE/Contents/Helpers/codeisland-bridge"
-codesign --force --sign - "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+ENTITLEMENTS="CodeIsland.entitlements"
+
+# Use SIGN_ID env var, or auto-detect first valid codesigning identity, or fall back to ad-hoc
+if [ -z "$SIGN_ID" ]; then
+    SIGN_ID=$(security find-identity -v -p codesigning | head -1 | sed 's/.*"\(.*\)".*/\1/' 2>/dev/null || true)
+fi
+if [ -z "$SIGN_ID" ]; then
+    echo "No developer certificate found, using ad-hoc signing..."
+    SIGN_ID="-"
+fi
+
+echo "Code signing ($SIGN_ID)..."
+codesign --force --sign "$SIGN_ID" "$APP_BUNDLE/Contents/Helpers/codeisland-bridge"
+codesign --force --sign "$SIGN_ID" --entitlements "$ENTITLEMENTS" "$APP_BUNDLE"
 
 echo "Done: $APP_BUNDLE"
 echo "Run: open $APP_BUNDLE"

@@ -1885,7 +1885,7 @@ func cliIcon(source: String, size: CGFloat = 16) -> NSImage? {
     let key = "\(source)_\(Int(size))"
     if let cached = cliIconCache[key] { return cached }
     guard let filename = cliIconFiles[source],
-          let url = Bundle.module.url(forResource: filename, withExtension: "png", subdirectory: "Resources/cli-icons"),
+          let url = Bundle.appModule.url(forResource: filename, withExtension: "png", subdirectory: "Resources/cli-icons"),
           let image = NSImage(contentsOf: url)
     else { return nil }
     image.size = NSSize(width: size, height: size)

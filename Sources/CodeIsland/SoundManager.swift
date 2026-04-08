@@ -82,13 +82,13 @@ class SoundManager {
 
     /// Load a WAV from the SPM resource bundle
     private func loadSound(_ name: String) -> NSSound? {
-        // SPM generates Bundle.module for resource bundles
+        // SPM generates Bundle.appModule for resource bundles
         // Resources are inside CodeIsland_CodeIsland.bundle/Resources/
-        if let url = Bundle.module.url(forResource: name, withExtension: "wav", subdirectory: "Resources") {
+        if let url = Bundle.appModule.url(forResource: name, withExtension: "wav", subdirectory: "Resources") {
             return NSSound(contentsOf: url, byReference: false)
         }
         // Fallback: try without subdirectory
-        if let url = Bundle.module.url(forResource: name, withExtension: "wav") {
+        if let url = Bundle.appModule.url(forResource: name, withExtension: "wav") {
             return NSSound(contentsOf: url, byReference: false)
         }
         return nil

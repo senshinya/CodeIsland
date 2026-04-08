@@ -782,10 +782,10 @@ struct ConfigInstaller {
     /// The JS plugin source — embedded as resource or bundled alongside
     private static func opencodePluginSource() -> String? {
         // Try SPM resource bundle (where build actually places it)
-        if let url = Bundle.module.url(forResource: "codeisland-opencode", withExtension: "js", subdirectory: "Resources"),
+        if let url = Bundle.appModule.url(forResource: "codeisland-opencode", withExtension: "js", subdirectory: "Resources"),
            let src = try? String(contentsOf: url) { return src }
         // Fallback: try without subdirectory
-        if let url = Bundle.module.url(forResource: "codeisland-opencode", withExtension: "js"),
+        if let url = Bundle.appModule.url(forResource: "codeisland-opencode", withExtension: "js"),
            let src = try? String(contentsOf: url) { return src }
         return nil
     }
