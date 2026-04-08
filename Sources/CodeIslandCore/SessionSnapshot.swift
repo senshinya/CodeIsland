@@ -40,6 +40,7 @@ public struct SessionSnapshot {
     public var kittyWindowId: String?   // Kitty window ID for precise focus
     public var tmuxPane: String?        // tmux pane identifier (%0, %1, etc.)
     public var tmuxClientTty: String?   // tmux client TTY for real terminal detection
+    public var tmuxEnv: String?         // raw TMUX env var (socket info for non-default tmux server)
     public var termBundleId: String?    // __CFBundleIdentifier for precise terminal ID
     public var cliPid: pid_t?            // CLI process PID (from bridge _ppid)
     public var source: String = "claude" // "claude" or "codex"
@@ -501,6 +502,7 @@ public func reduceEvent(
         if let kitty = event.rawJSON["_kitty_window"] as? String, !kitty.isEmpty { sessions[sessionId]?.kittyWindowId = kitty }
         if let pane = event.rawJSON["_tmux_pane"] as? String, !pane.isEmpty { sessions[sessionId]?.tmuxPane = pane }
         if let tmuxTty = event.rawJSON["_tmux_client_tty"] as? String, !tmuxTty.isEmpty { sessions[sessionId]?.tmuxClientTty = tmuxTty }
+        if let tmux = event.rawJSON["_tmux"] as? String, !tmux.isEmpty { sessions[sessionId]?.tmuxEnv = tmux }
         if let mode = event.rawJSON["permission_mode"] as? String { sessions[sessionId]?.permissionMode = mode }
         if let roots = event.rawJSON["workspace_roots"] as? [String], let first = roots.first, !first.isEmpty {
             sessions[sessionId]?.cwd = first
@@ -590,6 +592,9 @@ public func extractMetadata(into sessions: inout [String: SessionSnapshot], sess
     }
     if let tmuxTty = event.rawJSON["_tmux_client_tty"] as? String, !tmuxTty.isEmpty {
         sessions[sessionId]?.tmuxClientTty = tmuxTty
+    }
+    if let tmux = event.rawJSON["_tmux"] as? String, !tmux.isEmpty {
+        sessions[sessionId]?.tmuxEnv = tmux
     }
     if let bundle = event.rawJSON["_term_bundle"] as? String, !bundle.isEmpty {
         sessions[sessionId]?.termBundleId = bundle

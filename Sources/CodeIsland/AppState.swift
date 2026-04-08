@@ -855,6 +855,7 @@ final class AppState {
             snapshot.kittyWindowId = p.kittyWindowId
             snapshot.tmuxPane = p.tmuxPane
             snapshot.tmuxClientTty = p.tmuxClientTty
+            snapshot.tmuxEnv = p.tmuxEnv
             snapshot.termBundleId = p.termBundleId
             snapshot.lastActivity = p.lastActivity
             // Restore persisted cliPid — enables immediate process monitoring for all CLIs

@@ -5,7 +5,6 @@ import CodeIslandCore
 /// Supports tab-level switching for: Ghostty, iTerm2, Terminal.app, WezTerm, kitty.
 /// Falls back to app-level activation for: Alacritty, Warp, Hyper, Tabby, Rio.
 struct TerminalActivator {
-
     private static let knownTerminals: [(name: String, bundleId: String)] = [
         ("cmux", "com.cmuxterm.app"),
         ("Ghostty", "com.mitchellh.ghostty"),
@@ -79,7 +78,7 @@ struct TerminalActivator {
 
         // --- tmux: switch pane first, then fall through to terminal-specific activation ---
         if let pane = session.tmuxPane, !pane.isEmpty {
-            activateTmux(pane: pane)
+            activateTmux(pane: pane, tmuxEnv: session.tmuxEnv)
         }
 
         // In tmux, use the client TTY (outer terminal) for tab matching,
@@ -101,7 +100,13 @@ struct TerminalActivator {
         }
 
         if lower == "ghostty" {
-            activateGhostty(cwd: session.cwd, sessionId: sessionId, source: session.source)
+            activateGhostty(
+                cwd: session.cwd,
+                sessionId: sessionId,
+                source: session.source,
+                tmuxPane: session.tmuxPane,
+                tmuxEnv: session.tmuxEnv
+            )
             return
         }
 
@@ -126,16 +131,87 @@ struct TerminalActivator {
 
     // MARK: - Ghostty (AppleScript: match by CWD + session ID in title)
 
-    private static func activateGhostty(cwd: String?, sessionId: String? = nil, source: String = "claude") {
+    private static func activateGhostty(
+        cwd: String?,
+        sessionId: String? = nil,
+        source: String = "claude",
+        tmuxPane: String? = nil,
+        tmuxEnv: String? = nil
+    ) {
         guard let cwd = cwd, !cwd.isEmpty else { bringToFront("Ghostty"); return }
         // Ensure app is unhidden and brought to front (Space switching)
         if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.mitchellh.ghostty" }) {
             if app.isHidden { app.unhide() }
             app.activate()
         }
-        let escaped = escapeAppleScript(cwd)
-        // Match by session ID in title first (disambiguates same-CWD sessions),
-        // then by source-specific keyword in title, then first CWD match
+
+        // Resolve tmux title prefix (most reliable for tmux sessions in Ghostty).
+        // Example Ghostty title often contains: "<session>:<winIdx>:<winName> - ..."
+        var tmuxKey = ""
+        var tmuxSession = ""
+        if let pane = tmuxPane?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !pane.isEmpty,
+           let tmuxBin = findBinary("tmux"),
+           let data = runProcess(
+                tmuxBin,
+                args: ["display-message", "-p", "-t", pane, "-F", "#{session_name}:#{window_index}:#{window_name}"],
+                env: tmuxProcessEnv(tmuxEnv)
+           ),
+           let key = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !key.isEmpty {
+            tmuxKey = key
+            // Also store session name only (tmuxcc-style), which is more robust across title formats.
+            if let first = key.split(separator: ":").first {
+                tmuxSession = String(first)
+            }
+        } else if let pane = tmuxPane?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !pane.isEmpty,
+                  let tmuxBin = findBinary("tmux"),
+                  let data = runProcess(
+                    tmuxBin,
+                    args: ["display-message", "-p", "-t", pane, "-F", "#{session_name}"],
+                    env: tmuxProcessEnv(tmuxEnv)
+                  ),
+                  let s = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !s.isEmpty {
+            tmuxSession = s
+        }
+
+        // Normalize CWD variants:
+        // - trim whitespace
+        // - strip trailing slashes (except "/")
+        // - include symlink-resolved path variant
+        func stripTrailingSlashes(_ path: String) -> String {
+            var p = path
+            while p.count > 1, p.hasSuffix("/") { p.removeLast() }
+            return p
+        }
+        let trimmedCwd = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cwd1 = stripTrailingSlashes(trimmedCwd)
+        let cwd2 = stripTrailingSlashes(URL(fileURLWithPath: cwd1).resolvingSymlinksInPath().path)
+        let dirName = (cwd1 as NSString).lastPathComponent
+
+        let home = NSHomeDirectory()
+        let tildeCwd: String = {
+            if cwd1 == home { return "~" }
+            if cwd1.hasPrefix(home + "/") {
+                return "~" + String(cwd1.dropFirst(home.count))
+            }
+            return ""
+        }()
+
+        let escapedCwd1 = escapeAppleScript(cwd1)
+        let escapedCwd2 = escapeAppleScript(cwd2)
+        let escapedDir = escapeAppleScript(dirName)
+        let escapedTilde = escapeAppleScript(tildeCwd)
+        let escapedTmux = escapeAppleScript(tmuxKey)
+        let escapedTmuxSession = escapeAppleScript(tmuxSession)
+
+        // Match order:
+        // 1) tmux title prefix (when available)
+        // 2) session ID in title (disambiguates same-CWD sessions)
+        // 3) source keyword in title ("claude"/"codex"/...)
+        // 4) CWD match (working directory), then title-based fallback
         let idFilter: String
         if let sid = sessionId, !sid.isEmpty {
             let escapedSid = escapeAppleScript(String(sid.prefix(8)))
@@ -151,11 +227,71 @@ struct TerminalActivator {
         } else {
             idFilter = ""
         }
-        // Use source name as keyword to prefer the right tab when multiple share CWD
         let keyword = escapeAppleScript(source)
         let script = """
         tell application "Ghostty"
-            set matches to (every terminal whose working directory is "\(escaped)")
+            set allTerms to terminals
+
+            -- 1) tmux: match by tmux title prefix first (more robust than CWD in tmux)
+            set tmuxKey to "\(escapedTmux)"
+            set tmuxSession to "\(escapedTmuxSession)"
+
+            -- 1a) exact window key when available: "<session>:<winIdx>:<winName>"
+            if tmuxKey is not "" then
+                repeat with t in allTerms
+                    try
+                        if name of t contains tmuxKey then
+                            focus t
+                            activate
+                            return
+                        end if
+                    end try
+                end repeat
+            end if
+
+            -- 1b) tmuxcc-style fallback: title starts with "<session>:"
+            if tmuxSession is not "" then
+                repeat with t in allTerms
+                    try
+                        set tname to (name of t as text)
+                        if tname starts with (tmuxSession & ":") then
+                            focus t
+                            activate
+                            return
+                        end if
+                    end try
+                end repeat
+            end if
+
+            -- 2) CWD: exact match on Ghostty's working directory property (if available)
+            set matches to {}
+            set cwd1 to "\(escapedCwd1)"
+            set cwd2 to "\(escapedCwd2)"
+            if cwd1 is not "" then
+                try
+                    set matches to (every terminal whose working directory is cwd1)
+                end try
+            end if
+            if (count of matches) = 0 and cwd2 is not "" and cwd2 is not cwd1 then
+                try
+                    set matches to (every terminal whose working directory is cwd2)
+                end try
+            end if
+
+            -- 3) Fallback: match by title when Ghostty can't report the true working directory (common in tmux)
+            if (count of matches) = 0 then
+                set dirName to "\(escapedDir)"
+                set tildeCwd to "\(escapedTilde)"
+                repeat with t in allTerms
+                    try
+                        set tname to (name of t as text)
+                        if (tildeCwd is not "" and tname contains tildeCwd) or (cwd1 is not "" and tname contains cwd1) or (dirName is not "" and tname contains dirName) then
+                            set end of matches to t
+                        end if
+                    end try
+                end repeat
+            end if
+
             \(idFilter)
             repeat with t in matches
                 if name of t contains "\(keyword)" then
@@ -170,7 +306,9 @@ struct TerminalActivator {
             activate
         end tell
         """
-        runAppleScript(script)
+        // Use /usr/bin/osascript to run AppleScript out-of-process (tmuxcc uses the same approach).
+        // This avoids relying on NSAppleScript execution inside the app process.
+        runOsaScript(script)
     }
 
     // MARK: - iTerm2 (AppleScript: match by session ID)
@@ -277,12 +415,12 @@ struct TerminalActivator {
 
     // MARK: - tmux (CLI: tmux select-window/select-pane)
 
-    private static func activateTmux(pane: String) {
+    private static func activateTmux(pane: String, tmuxEnv: String? = nil) {
         guard let bin = findBinary("tmux") else { return }
         DispatchQueue.global(qos: .userInitiated).async {
             // Switch to the window containing the pane, then select the pane
-            _ = runProcess(bin, args: ["select-window", "-t", pane])
-            _ = runProcess(bin, args: ["select-pane", "-t", pane])
+            _ = runProcess(bin, args: ["select-window", "-t", pane], env: tmuxProcessEnv(tmuxEnv))
+            _ = runProcess(bin, args: ["select-pane", "-t", pane], env: tmuxProcessEnv(tmuxEnv))
         }
     }
 
@@ -357,6 +495,17 @@ struct TerminalActivator {
         }
     }
 
+    private static func runOsaScript(_ source: String) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            proc.arguments = ["-e", source]
+            proc.standardOutput = FileHandle.nullDevice
+            proc.standardError = FileHandle.nullDevice
+            try? proc.run()
+        }
+    }
+
     /// Escape special characters for AppleScript string interpolation
     private static func escapeAppleScript(_ s: String) -> String {
         s.replacingOccurrences(of: "\\", with: "\\\\")
@@ -375,10 +524,15 @@ struct TerminalActivator {
 
     /// Run a process and return stdout. Returns nil on failure.
     @discardableResult
-    private static func runProcess(_ path: String, args: [String]) -> Data? {
+    private static func runProcess(_ path: String, args: [String], env: [String: String]? = nil) -> Data? {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: path)
         proc.arguments = args
+        if let env {
+            var merged = ProcessInfo.processInfo.environment
+            for (k, v) in env { merged[k] = v }
+            proc.environment = merged
+        }
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
@@ -391,5 +545,11 @@ struct TerminalActivator {
         } catch {
             return nil
         }
+    }
+
+    private static func tmuxProcessEnv(_ tmuxEnv: String?) -> [String: String]? {
+        guard let tmuxEnv = tmuxEnv?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !tmuxEnv.isEmpty else { return nil }
+        return ["TMUX": tmuxEnv]
     }
 }
