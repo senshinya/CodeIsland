@@ -13,6 +13,7 @@ struct NotchPanelView: View {
     @AppStorage(SettingsKey.smartSuppress) private var smartSuppress = SettingsDefaults.smartSuppress
     @AppStorage(SettingsKey.hideWhenNoSession) private var hideWhenNoSession = SettingsDefaults.hideWhenNoSession
     @AppStorage(SettingsKey.showToolStatus) private var showToolStatus = SettingsDefaults.showToolStatus
+    @AppStorage(SettingsKey.showUsageInfo) private var showUsageInfo = SettingsDefaults.showUsageInfo
     @AppStorage(SettingsKey.collapsedWidthOffsetIdle) private var collapsedWidthOffsetIdle = SettingsDefaults.collapsedWidthOffsetIdle
     @AppStorage(SettingsKey.collapsedWidthOffsetWorking) private var collapsedWidthOffsetWorking = SettingsDefaults.collapsedWidthOffsetWorking
     @AppStorage(SettingsKey.collapsedWidthPreview) private var collapsedWidthPreview = ""
@@ -92,7 +93,7 @@ struct NotchPanelView: View {
                             Spacer(minLength: notchW)
                         } else if !shouldShowExpanded && showToolStatus {
                             CompactToolStatus(appState: appState)
-                            Spacer(minLength: 0)
+                            Spacer(minLength: 8)
                         } else {
                             Spacer(minLength: 0)
                         }
@@ -132,7 +133,8 @@ struct NotchPanelView: View {
                                 queueTotal: appState.permissionQueue.count,
                                 onAllow: { appState.approvePermission(always: false) },
                                 onAlwaysAllow: { appState.approvePermission(always: true) },
-                                onDeny: { appState.denyPermission() }
+                                onDeny: { appState.denyPermission() },
+                                onBypass: { appState.bypassPermission() }
                             )
                             .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .top)))
                         }
@@ -206,7 +208,14 @@ struct NotchPanelView: View {
                     }
                 }
             }
-            .onAppear { displayedToolStatus = showToolStatus }
+            .onAppear {
+                displayedToolStatus = showToolStatus
+                if showUsageInfo { UsageTracker.shared.startPolling() }
+            }
+            .onChange(of: showUsageInfo) { _, enabled in
+                if enabled { UsageTracker.shared.startPolling() }
+                else { UsageTracker.shared.stopPolling() }
+            }
             .contentShape(Rectangle())
             .onHover { hovering in
                 // Idle indicator hover
@@ -279,7 +288,7 @@ struct NotchPanelView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(NotchAnimation.open, value: appState.surface)
-        .animation(.easeInOut(duration: 0.25), value: appState.status)
+        .animation(.easeInOut(duration: 0.5), value: appState.status)
         .animation(.easeInOut(duration: 0.15), value: collapsedWidthOffsetIdle)
         .animation(.easeInOut(duration: 0.15), value: collapsedWidthOffsetWorking)
         .animation(.easeInOut(duration: 0.15), value: collapsedWidthPreview)
@@ -299,6 +308,8 @@ private struct CompactLeftWing: View {
     let hasNotch: Bool
     let showToolStatus: Bool
     @AppStorage(SettingsKey.sessionGroupingMode) private var groupingMode = SettingsDefaults.sessionGroupingMode
+    @AppStorage(SettingsKey.showUsageInfo) private var showUsageInfo = SettingsDefaults.showUsageInfo
+    @ObservedObject private var usageTracker = UsageTracker.shared
 
     private var displaySession: SessionSnapshot? {
         let sid = appState.rotatingSessionId ?? appState.activeSessionId ?? appState.sessions.keys.sorted().first
@@ -314,30 +325,8 @@ private struct CompactLeftWing: View {
     var body: some View {
         HStack(spacing: 6) {
             if expanded {
-                AppLogoView(size: 36, showBackground: false)
-                if appState.sessions.count > 1 {
-                    HStack(spacing: 1) {
-                        ForEach([("all", "ALL"), ("status", "STA"), ("cli", "CLI")], id: \.0) { tag, label in
-                            let selected = groupingMode == tag
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.15)) { groupingMode = tag }
-                            } label: {
-                                PixelText(
-                                    text: label,
-                                    color: selected ? Color(red: 0.3, green: 0.85, blue: 0.4) : .white.opacity(0.3),
-                                    pixelSize: 1.3
-                                )
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 4)
-                                .background(
-                                    Rectangle().fill(selected ? .white.opacity(0.1) : .clear)
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .background(Rectangle().fill(.white.opacity(0.05)))
-                    .overlay(Rectangle().stroke(.white.opacity(0.1), lineWidth: 1))
+                if showUsageInfo && usageTracker.isAvailable {
+                    UsageInfoBar(data: usageTracker.data)
                 }
             } else {
                 MascotView(source: displaySource, status: displayStatus, size: mascotSize)
@@ -356,7 +345,7 @@ private struct CompactLeftWing: View {
                 }
             }
         }
-        .padding(.leading, 6)
+        .padding(.leading, 10)
         .clipped()
         .onChange(of: liveTool) { _, newTool in
             lingerTimer?.invalidate()
@@ -450,7 +439,7 @@ private struct CompactRightWing: View {
                 }
             }
         }
-        .padding(.trailing, 6)
+        .padding(.trailing, 10)
     }
 }
 
@@ -570,6 +559,52 @@ private struct CompactToolStatus: View {
     }
 }
 
+// MARK: - Usage Info Bar
+
+private struct UsageInfoBar: View {
+    let data: UsageTracker.UsageData
+    private let green = Color(red: 0.3, green: 0.85, blue: 0.4)
+    private let orange = Color(red: 0.95, green: 0.6, blue: 0.2)
+    private let dimWhite = Color.white.opacity(0.5)
+    private let fs: CGFloat = 11
+
+    private func usageColor(_ pct: Double) -> Color {
+        if pct >= 80 { return Color(red: 1.0, green: 0.35, blue: 0.3) }
+        if pct >= 50 { return orange }
+        return green
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text("Claude")
+                .foregroundStyle(.white.opacity(0.7))
+
+            Text("5h")
+                .foregroundStyle(.white.opacity(0.9))
+            Text(String(format: "%.0f%%", data.fiveHour.utilization))
+                .foregroundStyle(usageColor(data.fiveHour.utilization))
+                .fontWeight(.bold)
+            Text(UsageTracker.formatTimeRemaining(data.fiveHour.resetsAt))
+                .foregroundStyle(dimWhite)
+
+            Text("|")
+                .foregroundStyle(.white.opacity(0.25))
+
+            Text("7d")
+                .foregroundStyle(.white.opacity(0.9))
+            Text(String(format: "%.0f%%", data.sevenDay.utilization))
+                .foregroundStyle(usageColor(data.sevenDay.utilization))
+                .fontWeight(.bold)
+            Text(UsageTracker.formatTimeRemaining(data.sevenDay.resetsAt))
+                .foregroundStyle(dimWhite)
+        }
+        .font(.system(size: fs, weight: .medium, design: .monospaced))
+        .lineLimit(1)
+        .fixedSize()
+        .padding(.leading, 6)
+    }
+}
+
 private struct NotchIconButton: View {
     let icon: String
     var tint: Color = .white
@@ -658,6 +693,7 @@ private struct ApprovalBar: View {
     let onAllow: () -> Void
     let onAlwaysAllow: () -> Void
     let onDeny: () -> Void
+    let onBypass: () -> Void
 
     private var fileName: String? {
         guard let fp = toolInput?["file_path"] as? String else { return nil }
@@ -714,11 +750,12 @@ private struct ApprovalBar: View {
                     .background(Color.white.opacity(0.04))
             }
 
-            // Pixel-style buttons
-            HStack(spacing: 6) {
-                PixelButton(label: L10n.shared["deny"], fg: .white.opacity(0.95), bg: Color(red: 0.45, green: 0.12, blue: 0.12), border: Color(red: 0.7, green: 0.25, blue: 0.25), action: onDeny)
-                PixelButton(label: L10n.shared["allow_once"], fg: .white.opacity(0.95), bg: Color(red: 0.16, green: 0.38, blue: 0.18), border: Color(red: 0.28, green: 0.62, blue: 0.32), action: onAllow)
-                PixelButton(label: L10n.shared["always"], fg: .white.opacity(0.95), bg: Color(red: 0.14, green: 0.28, blue: 0.52), border: Color(red: 0.28, green: 0.48, blue: 0.82), action: onAlwaysAllow)
+            // Approval buttons
+            HStack(spacing: 5) {
+                PixelButton(label: L10n.shared["deny"], fg: .white.opacity(0.85), bg: Color(white: 0.18), border: Color(white: 0.35), action: onDeny)
+                PixelButton(label: L10n.shared["allow_once"], fg: .black.opacity(0.85), bg: Color(white: 0.88), border: Color(white: 0.7), action: onAllow)
+                PixelButton(label: L10n.shared["always"], fg: .black.opacity(0.85), bg: Color(red: 0.95, green: 0.6, blue: 0.15), border: Color(red: 0.85, green: 0.5, blue: 0.1), action: onAlwaysAllow)
+                PixelButton(label: L10n.shared["bypass"], fg: .white.opacity(0.95), bg: Color(red: 0.72, green: 0.15, blue: 0.15), border: Color(red: 0.6, green: 0.1, blue: 0.1), action: onBypass)
             }
             .padding(.horizontal, 14)
         }
@@ -1069,17 +1106,17 @@ private struct PixelButton: View {
     var body: some View {
         Button(action: action) {
             Text(label)
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(fg)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 7)
+                .padding(.vertical, 8)
                 .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(hovering ? bg.opacity(1.5) : bg)
+                    Capsule()
+                        .fill(hovering ? bg.opacity(1.2) : bg)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 4)
-                        .strokeBorder(hovering ? border : border.opacity(0.4), lineWidth: 1)
+                    Capsule()
+                        .strokeBorder(hovering ? border : border.opacity(0.3), lineWidth: 1)
                 )
         }
         .buttonStyle(.plain)
@@ -1187,7 +1224,8 @@ private struct SessionListView: View {
                         SessionCard(
                             sessionId: sessionId,
                             session: session,
-                            isCompletion: onlySessionId != nil
+                            isCompletion: onlySessionId != nil,
+                            onDelete: { appState.dismissSession(sessionId) }
                         )
                     }
                 }
@@ -1361,6 +1399,7 @@ private struct SessionCard: View {
     let sessionId: String
     let session: SessionSnapshot
     var isCompletion: Bool = false
+    var onDelete: (() -> Void)?
     @State private var hovering = false
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
     @AppStorage(SettingsKey.aiMessageLines) private var aiMessageLines = SettingsDefaults.aiMessageLines
@@ -1429,6 +1468,19 @@ private struct SessionCard: View {
                         }
                         SessionTag(timeAgo(session.startTime))
                         TerminalBadge(session: session)
+                        if hovering, let onDelete {
+                            Button {
+                                withAnimation(.easeOut(duration: 0.2)) { onDelete() }
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(.white.opacity(0.5))
+                                    .frame(width: 18, height: 18)
+                                    .background(Circle().fill(.white.opacity(0.1)))
+                            }
+                            .buttonStyle(.plain)
+                            .transition(.opacity)
+                        }
                     }
                 }
 

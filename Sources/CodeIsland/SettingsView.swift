@@ -440,6 +440,7 @@ private struct AppearancePage: View {
     @AppStorage(SettingsKey.aiMessageLines) private var aiMessageLines = SettingsDefaults.aiMessageLines
     @AppStorage(SettingsKey.showAgentDetails) private var showAgentDetails = SettingsDefaults.showAgentDetails
     @AppStorage(SettingsKey.showToolStatus) private var showToolStatus = SettingsDefaults.showToolStatus
+    @AppStorage(SettingsKey.showUsageInfo) private var showUsageInfo = SettingsDefaults.showUsageInfo
     @AppStorage(SettingsKey.collapsedWidthOffsetIdle) private var collapsedWidthOffsetIdle = SettingsDefaults.collapsedWidthOffsetIdle
     @AppStorage(SettingsKey.collapsedWidthOffsetWorking) private var collapsedWidthOffsetWorking = SettingsDefaults.collapsedWidthOffsetWorking
     @AppStorage(SettingsKey.collapsedWidthPreview) private var collapsedWidthPreview = ""
@@ -546,6 +547,7 @@ private struct AppearancePage: View {
                 }
                 Toggle(l10n["show_agent_details"], isOn: $showAgentDetails)
                 Toggle(l10n["show_tool_status"], isOn: $showToolStatus)
+                Toggle(l10n["show_usage_info"], isOn: $showUsageInfo)
             }
         }
         .formStyle(.grouped)
@@ -958,28 +960,6 @@ private struct AboutPage: View {
                 }
 
                 HStack(spacing: 10) {
-                    Button {
-                        UpdateChecker.shared.checkForUpdates(silent: false)
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                                .font(.system(size: 11))
-                            Text(l10n["check_for_updates"])
-                                .font(.system(size: 12, weight: .medium))
-                        }
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 7)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Color(nsColor: .controlBackgroundColor))
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .onHover { h in
-                        if h { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-                    }
-
                     Button {
                         DiagnosticsExporter.export()
                     } label: {

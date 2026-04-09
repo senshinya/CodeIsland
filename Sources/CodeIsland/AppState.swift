@@ -18,6 +18,8 @@ final class AppState {
     var activeSessionId: String?
     var permissionQueue: [PermissionRequest] = []
     var questionQueue: [QuestionRequest] = []
+    /// Sessions with all future permissions auto-approved (bypass mode)
+    var bypassedSessions: Set<String> = []
 
     /// Computed: first item in permission queue (backward compat for UI reads)
     var pendingPermission: PermissionRequest? { permissionQueue.first }
@@ -338,6 +340,10 @@ final class AppState {
     /// Remove a session, clean up its monitor, and resume any pending continuations.
     /// Every removal path (cleanup timer, process exit, reducer effect) goes through here
     /// so leaked continuations / connections are impossible.
+    func dismissSession(_ sessionId: String) {
+        removeSession(sessionId)
+    }
+
     private func removeSession(_ sessionId: String) {
         // Resume ALL pending continuations for this session
         drainPermissions(forSession: sessionId)
@@ -791,6 +797,15 @@ final class AppState {
         sessions[sessionId]?.toolDescription = event.toolDescription
         sessions[sessionId]?.lastActivity = Date()
 
+        // Auto-approve if session is in bypass mode
+        if bypassedSessions.contains(sessionId) {
+            let response = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#
+            continuation.resume(returning: Data(response.utf8))
+            sessions[sessionId]?.status = .running
+            refreshDerivedState()
+            return
+        }
+
         let request = PermissionRequest(event: event, continuation: continuation)
         permissionQueue.append(request)
 
@@ -831,6 +846,30 @@ final class AppState {
         pending.continuation.resume(returning: responseData)
         let sessionId = pending.event.sessionId ?? "default"
         sessions[sessionId]?.status = .running
+
+        showNextPending()
+        refreshDerivedState()
+    }
+
+    func bypassPermission() {
+        guard !permissionQueue.isEmpty else { return }
+        let pending = permissionQueue.removeFirst()
+        let sessionId = pending.event.sessionId ?? "default"
+
+        // Mark session as bypassed — all future permissions auto-approved
+        bypassedSessions.insert(sessionId)
+
+        // Allow the current request
+        let response = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#
+        pending.continuation.resume(returning: Data(response.utf8))
+        sessions[sessionId]?.status = .running
+
+        // Auto-approve any queued requests for this session
+        let queued = permissionQueue.filter { $0.event.sessionId == sessionId }
+        permissionQueue.removeAll { $0.event.sessionId == sessionId }
+        for req in queued {
+            req.continuation.resume(returning: Data(response.utf8))
+        }
 
         showNextPending()
         refreshDerivedState()

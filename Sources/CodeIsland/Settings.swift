@@ -3,10 +3,11 @@ import ServiceManagement
 
 enum AppVersion {
     /// Update this each release. Used as fallback when Info.plist is unavailable (debug builds).
-    static let fallback = "1.0.17"
+    static let fallback = "1.0.17-shinya"
 
     static var current: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? fallback
+        let base = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? fallback
+        return base.hasSuffix("-shinya") ? base : base + "-shinya"
     }
 }
 
@@ -70,6 +71,9 @@ enum SettingsKey {
     // Tool status display
     static let showToolStatus = "showToolStatus"              // true = detailed, false = simple
 
+    // Usage display
+    static let showUsageInfo = "showUsageInfo"
+
     // Panel size adjustments
     static let collapsedWidthOffset = "collapsedWidthOffset"     // Legacy: migrated to idle/working
     static let collapsedWidthOffsetIdle = "collapsedWidthOffsetIdle"
@@ -117,6 +121,8 @@ struct SettingsDefaults {
 
     static let showToolStatus = true
 
+    static let showUsageInfo = false
+
     static let collapsedWidthOffset = 0.0   // Legacy
     static let collapsedWidthOffsetIdle = 0.0
     static let collapsedWidthOffsetWorking = 0.0
@@ -161,6 +167,7 @@ class SettingsManager {
             SettingsKey.mascotSpeedWaiting: SettingsDefaults.mascotSpeedWaiting,
             SettingsKey.sessionGroupingMode: SettingsDefaults.sessionGroupingMode,
             SettingsKey.showToolStatus: SettingsDefaults.showToolStatus,
+            SettingsKey.showUsageInfo: SettingsDefaults.showUsageInfo,
             SettingsKey.collapsedWidthOffset: SettingsDefaults.collapsedWidthOffset,
             SettingsKey.collapsedWidthOffsetIdle: SettingsDefaults.collapsedWidthOffsetIdle,
             SettingsKey.collapsedWidthOffsetWorking: SettingsDefaults.collapsedWidthOffsetWorking,
