@@ -75,9 +75,10 @@ struct NotchPanelView: View {
             return min(w, screenWidth - 40)
         }
         let wing = compactWingWidth
-        let extra: CGFloat = appState.status == .idle ? 0 : 20
-        // Reserve space for tool status — proportional to screen width
-        let toolExtra: CGFloat = displayedToolStatus ? (hasNotch ? screenWidth * 0.03 : screenWidth * 0.04) : 0
+        let isIdle = appState.status == .idle
+        let extra: CGFloat = isIdle ? 0 : 20
+        // Reserve space for tool status — proportional to screen width (only when not idle)
+        let toolExtra: CGFloat = !isIdle && displayedToolStatus ? (hasNotch ? screenWidth * 0.03 : screenWidth * 0.04) : 0
         let baseCollapsed = notchW + wing * 2 + extra + toolExtra
         return max(notchW, baseCollapsed + activeCollapsedWidthOffset)
     }
