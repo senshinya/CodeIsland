@@ -651,7 +651,7 @@ private struct IdleIndicatorBar: View {
                 MascotView(source: "claude", status: .idle, size: mascotSize)
                     .opacity(hovered ? 0.9 : 0.5)
             }
-            .padding(.leading, 6)
+            .padding(.leading, 10)
 
             Spacer(minLength: hasNotch ? notchW : 0)
 
