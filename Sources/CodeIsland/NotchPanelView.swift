@@ -13,6 +13,11 @@ struct NotchPanelView: View {
     @AppStorage(SettingsKey.smartSuppress) private var smartSuppress = SettingsDefaults.smartSuppress
     @AppStorage(SettingsKey.hideWhenNoSession) private var hideWhenNoSession = SettingsDefaults.hideWhenNoSession
     @AppStorage(SettingsKey.showToolStatus) private var showToolStatus = SettingsDefaults.showToolStatus
+    @AppStorage(SettingsKey.collapsedWidthOffsetIdle) private var collapsedWidthOffsetIdle = SettingsDefaults.collapsedWidthOffsetIdle
+    @AppStorage(SettingsKey.collapsedWidthOffsetWorking) private var collapsedWidthOffsetWorking = SettingsDefaults.collapsedWidthOffsetWorking
+    @AppStorage(SettingsKey.collapsedWidthPreview) private var collapsedWidthPreview = ""
+    @AppStorage(SettingsKey.expandedWidth) private var expandedWidth = SettingsDefaults.expandedWidth
+    @AppStorage(SettingsKey.collapsedHeightOffset) private var collapsedHeightOffset = SettingsDefaults.collapsedHeightOffset
 
     /// Delayed hover: prevents accidental expansion when mouse passes through
     @State private var hoverTimer: Timer?
@@ -43,17 +48,37 @@ struct NotchPanelView: View {
     /// Minimum wing width needed to display compact bar content
     private var compactWingWidth: CGFloat { mascotSize + 14 }
 
+    /// Effective collapsed bar height — respects user offset
+    private var collapsedBarHeight: CGFloat {
+        notchHeight + CGFloat(collapsedHeightOffset)
+    }
+
+    /// Active collapsed width offset — respects preview override from settings
+    private var activeCollapsedWidthOffset: CGFloat {
+        if collapsedWidthPreview == "idle" { return CGFloat(collapsedWidthOffsetIdle) }
+        if collapsedWidthPreview == "working" { return CGFloat(collapsedWidthOffsetWorking) }
+        // Auto: idle when no active sessions or all idle, working otherwise
+        let isIdle = !isActive || appState.status == .idle
+        return CGFloat(isIdle ? collapsedWidthOffsetIdle : collapsedWidthOffsetWorking)
+    }
+
     /// Total panel width — adapts based on state and screen geometry
     private var panelWidth: CGFloat {
-        let maxWidth = min(620, screenWidth - 40)
-        if showIdleIndicator { return idleHovered ? notchW + compactWingWidth * 2 + 80 : notchW + compactWingWidth * 2 }
+        if showIdleIndicator {
+            let base = idleHovered ? notchW + compactWingWidth * 2 + 80 : notchW + compactWingWidth * 2
+            return max(notchW, base + activeCollapsedWidthOffset)
+        }
         if !isActive { return hasNotch ? notchW - 20 : notchW }
-        if shouldShowExpanded { return min(max(notchW + 200, 580), maxWidth) }
+        if shouldShowExpanded {
+            let w = expandedWidth > 0 ? CGFloat(expandedWidth) : CGFloat(SettingsDefaults.expandedWidth)
+            return min(w, screenWidth - 40)
+        }
         let wing = compactWingWidth
         let extra: CGFloat = appState.status == .idle ? 0 : 20
         // Reserve space for tool status — proportional to screen width
         let toolExtra: CGFloat = displayedToolStatus ? (hasNotch ? screenWidth * 0.03 : screenWidth * 0.04) : 0
-        return notchW + wing * 2 + extra + toolExtra
+        let baseCollapsed = notchW + wing * 2 + extra + toolExtra
+        return max(notchW, baseCollapsed + activeCollapsedWidthOffset)
     }
 
     var body: some View {
@@ -73,20 +98,21 @@ struct NotchPanelView: View {
                         }
                         CompactRightWing(appState: appState, expanded: shouldShowExpanded, hasNotch: hasNotch)
                     }
-                    .frame(height: notchHeight)
+                    .frame(height: shouldShowExpanded ? notchHeight : collapsedBarHeight)
                 } else if showIdleIndicator {
                     IdleIndicatorBar(
                         mascotSize: mascotSize,
                         compactWingWidth: compactWingWidth,
                         notchW: notchW,
                         notchHeight: notchHeight,
+                        barHeight: collapsedBarHeight,
                         hasNotch: hasNotch,
                         hovered: idleHovered
                     )
                 } else {
                     // Idle: just the notch shell
                     Spacer()
-                        .frame(height: notchHeight)
+                        .frame(height: collapsedBarHeight)
                 }
 
                 // Below-notch expanded content
@@ -154,9 +180,9 @@ struct NotchPanelView: View {
             .clipped()
             .background(
                 NotchPanelShape(
-                    topExtension: shouldShowExpanded ? 14 : 3,
-                    bottomRadius: shouldShowExpanded ? 24 : 12,
-                    minHeight: notchHeight
+                    topExtension: shouldShowExpanded ? 14 : 8,
+                    bottomRadius: shouldShowExpanded ? 24 : 14,
+                    minHeight: shouldShowExpanded ? notchHeight : collapsedBarHeight
                 )
                 .fill(.black)
             )
@@ -253,6 +279,12 @@ struct NotchPanelView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(NotchAnimation.open, value: appState.surface)
+        .animation(.easeInOut(duration: 0.25), value: appState.status)
+        .animation(.easeInOut(duration: 0.15), value: collapsedWidthOffsetIdle)
+        .animation(.easeInOut(duration: 0.15), value: collapsedWidthOffsetWorking)
+        .animation(.easeInOut(duration: 0.15), value: collapsedWidthPreview)
+        .animation(.easeInOut(duration: 0.15), value: expandedWidth)
+        .animation(.easeInOut(duration: 0.15), value: collapsedHeightOffset)
     }
 }
 
@@ -571,6 +603,7 @@ private struct IdleIndicatorBar: View {
     let compactWingWidth: CGFloat
     let notchW: CGFloat
     let notchHeight: CGFloat
+    let barHeight: CGFloat
     let hasNotch: Bool
     let hovered: Bool
     @ObservedObject private var l10n = L10n.shared
@@ -610,7 +643,7 @@ private struct IdleIndicatorBar: View {
                 .transition(.opacity)
             }
         }
-        .frame(height: notchHeight)
+        .frame(height: barHeight)
         .animation(NotchAnimation.micro, value: hovered)
     }
 }

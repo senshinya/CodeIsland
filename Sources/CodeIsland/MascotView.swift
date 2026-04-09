@@ -19,7 +19,21 @@ struct MascotView: View {
     let source: String
     let status: AgentStatus
     var size: CGFloat = 27
-    @AppStorage(SettingsKey.mascotSpeed) private var speedPct = SettingsDefaults.mascotSpeed
+    @AppStorage(SettingsKey.mascotSpeed) private var globalSpeedPct = SettingsDefaults.mascotSpeed
+    @AppStorage(SettingsKey.mascotSpeedProcessing) private var processingSpeedPct = SettingsDefaults.mascotSpeedProcessing
+    @AppStorage(SettingsKey.mascotSpeedIdle) private var idleSpeedPct = SettingsDefaults.mascotSpeedIdle
+    @AppStorage(SettingsKey.mascotSpeedWaiting) private var waitingSpeedPct = SettingsDefaults.mascotSpeedWaiting
+
+    /// Effective speed percentage for the current status (-1 means use global)
+    private var effectiveSpeedPct: Int {
+        let perStatus: Int
+        switch status {
+        case .processing, .running: perStatus = processingSpeedPct
+        case .idle:                 perStatus = idleSpeedPct
+        case .waitingApproval, .waitingQuestion: perStatus = waitingSpeedPct
+        }
+        return perStatus >= 0 ? perStatus : globalSpeedPct
+    }
 
     var body: some View {
         Group {
@@ -44,6 +58,6 @@ struct MascotView: View {
                 ClawdView(status: status, size: size)
             }
         }
-        .environment(\.mascotSpeed, Double(speedPct) / 100.0)
+        .environment(\.mascotSpeed, Double(effectiveSpeedPct) / 100.0)
     }
 }

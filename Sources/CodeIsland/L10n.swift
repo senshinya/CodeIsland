@@ -114,6 +114,11 @@ final class L10n: ObservableObject {
         "unlimited": "Unlimited",
         "show_agent_details": "Show Agent Activity Details",
         "show_tool_status": "Detailed Tool Activity in Compact Bar",
+        "panel_size": "Panel Size",
+        "collapsed_width_idle": "Collapsed Width (Idle)",
+        "collapsed_width_working": "Collapsed Width (Working)",
+        "expanded_width": "Expanded Width",
+        "collapsed_height": "Collapsed Height",
 
         // Mascots
         "preview_status": "Preview Status",
@@ -303,6 +308,11 @@ final class L10n: ObservableObject {
         "unlimited": "不限制",
         "show_agent_details": "显示代理活动详情",
         "show_tool_status": "紧凑栏显示工具调用详情",
+        "panel_size": "面板尺寸",
+        "collapsed_width_idle": "收起宽度（空闲）",
+        "collapsed_width_working": "收起宽度（工作）",
+        "expanded_width": "展开宽度",
+        "collapsed_height": "收起高度",
 
         // Mascots
         "preview_status": "预览状态",

@@ -440,6 +440,12 @@ private struct AppearancePage: View {
     @AppStorage(SettingsKey.aiMessageLines) private var aiMessageLines = SettingsDefaults.aiMessageLines
     @AppStorage(SettingsKey.showAgentDetails) private var showAgentDetails = SettingsDefaults.showAgentDetails
     @AppStorage(SettingsKey.showToolStatus) private var showToolStatus = SettingsDefaults.showToolStatus
+    @AppStorage(SettingsKey.collapsedWidthOffsetIdle) private var collapsedWidthOffsetIdle = SettingsDefaults.collapsedWidthOffsetIdle
+    @AppStorage(SettingsKey.collapsedWidthOffsetWorking) private var collapsedWidthOffsetWorking = SettingsDefaults.collapsedWidthOffsetWorking
+    @AppStorage(SettingsKey.collapsedWidthPreview) private var collapsedWidthPreview = ""
+    @AppStorage(SettingsKey.expandedWidth) private var expandedWidth = SettingsDefaults.expandedWidth
+    @AppStorage(SettingsKey.collapsedHeightOffset) private var collapsedHeightOffset = SettingsDefaults.collapsedHeightOffset
+    @State private var collapsedWidthPreviewTimer: Timer?
 
     var body: some View {
         Form {
@@ -464,6 +470,66 @@ private struct AppearancePage: View {
                 }
             }
 
+            Section(l10n["panel_size"]) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(l10n["collapsed_width_idle"])
+                        Spacer()
+                        Text(collapsedWidthOffsetIdle == 0
+                             ? l10n["default"]
+                             : String(format: "%+.0f px", collapsedWidthOffsetIdle))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Slider(value: $collapsedWidthOffsetIdle, in: -200...200, step: 10)
+                }
+                .onChange(of: collapsedWidthOffsetIdle) { _, _ in
+                    scheduleCollapsedWidthPreview("idle")
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(l10n["collapsed_width_working"])
+                        Spacer()
+                        Text(collapsedWidthOffsetWorking == 0
+                             ? l10n["default"]
+                             : String(format: "%+.0f px", collapsedWidthOffsetWorking))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Slider(value: $collapsedWidthOffsetWorking, in: -200...200, step: 10)
+                }
+                .onChange(of: collapsedWidthOffsetWorking) { _, _ in
+                    scheduleCollapsedWidthPreview("working")
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(l10n["collapsed_height"])
+                        Spacer()
+                        Text(collapsedHeightOffset == 0
+                             ? l10n["default"]
+                             : String(format: "%+.0f px", collapsedHeightOffset))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Slider(value: $collapsedHeightOffset, in: -15...15, step: 1)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(l10n["expanded_width"])
+                        Spacer()
+                        Text(expandedWidth == SettingsDefaults.expandedWidth
+                             ? l10n["default"]
+                             : String(format: "%.0f px", expandedWidth))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Slider(value: $expandedWidth, in: 400...800, step: 10)
+                }
+            }
+
             Section(l10n["content"]) {
                 Picker(l10n["content_font_size"], selection: $contentFontSize) {
                     Text("10pt").tag(10)
@@ -483,6 +549,15 @@ private struct AppearancePage: View {
             }
         }
         .formStyle(.grouped)
+        .onDisappear { collapsedWidthPreview = "" }
+    }
+
+    private func scheduleCollapsedWidthPreview(_ state: String) {
+        collapsedWidthPreview = state
+        collapsedWidthPreviewTimer?.invalidate()
+        collapsedWidthPreviewTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { _ in
+            DispatchQueue.main.async { collapsedWidthPreview = "" }
+        }
     }
 }
 
@@ -580,7 +655,39 @@ private struct AppearancePreview: View {
 private struct MascotsPage: View {
     @ObservedObject private var l10n = L10n.shared
     @State private var previewStatus: AgentStatus = .processing
-    @AppStorage(SettingsKey.mascotSpeed) private var mascotSpeed = SettingsDefaults.mascotSpeed
+    @AppStorage(SettingsKey.mascotSpeed) private var globalSpeed = SettingsDefaults.mascotSpeed
+    @AppStorage(SettingsKey.mascotSpeedProcessing) private var processingSpeed = SettingsDefaults.mascotSpeedProcessing
+    @AppStorage(SettingsKey.mascotSpeedIdle) private var idleSpeed = SettingsDefaults.mascotSpeedIdle
+    @AppStorage(SettingsKey.mascotSpeedWaiting) private var waitingSpeed = SettingsDefaults.mascotSpeedWaiting
+
+    /// Binding to the per-status speed for the currently selected preview status
+    private var currentSpeedBinding: Binding<Double> {
+        switch previewStatus {
+        case .processing, .running:
+            return Binding(
+                get: { Double(processingSpeed >= 0 ? processingSpeed : globalSpeed) },
+                set: { processingSpeed = Int($0) }
+            )
+        case .idle:
+            return Binding(
+                get: { Double(idleSpeed >= 0 ? idleSpeed : globalSpeed) },
+                set: { idleSpeed = Int($0) }
+            )
+        case .waitingApproval, .waitingQuestion:
+            return Binding(
+                get: { Double(waitingSpeed >= 0 ? waitingSpeed : globalSpeed) },
+                set: { waitingSpeed = Int($0) }
+            )
+        }
+    }
+
+    private var currentSpeedDisplay: Int {
+        switch previewStatus {
+        case .processing, .running:    return processingSpeed >= 0 ? processingSpeed : globalSpeed
+        case .idle:                    return idleSpeed >= 0 ? idleSpeed : globalSpeed
+        case .waitingApproval, .waitingQuestion: return waitingSpeed >= 0 ? waitingSpeed : globalSpeed
+        }
+    }
 
     private let mascotList: [(name: String, source: String, desc: String, color: Color)] = [
         ("Clawd", "claude", "Claude Code", Color(red: 0.871, green: 0.533, blue: 0.427)),
@@ -607,16 +714,13 @@ private struct MascotsPage: View {
                 HStack {
                     Text(l10n["mascot_speed"])
                     Spacer()
-                    Text(mascotSpeed == 0
+                    Text(currentSpeedDisplay == 0
                          ? l10n["speed_off"]
-                         : String(format: "%.1f×", Double(mascotSpeed) / 100.0))
+                         : String(format: "%.1f×", Double(currentSpeedDisplay) / 100.0))
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
-                Slider(value: Binding(
-                    get: { Double(mascotSpeed) },
-                    set: { mascotSpeed = Int($0) }
-                ), in: 0...300, step: 25)
+                Slider(value: currentSpeedBinding, in: 0...300, step: 25)
             }
 
             Section {

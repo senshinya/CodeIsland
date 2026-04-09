@@ -120,7 +120,10 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         let maxSessions = CGFloat(max(2, UserDefaults.standard.integer(forKey: SettingsKey.maxVisibleSessions)))
         let maxH = max(300, maxSessions * 90 + 60)
         let screenW = screen.frame.width
-        let width = min(620, screenW - 40)
+        let customExpandedWidth = UserDefaults.standard.double(forKey: SettingsKey.expandedWidth)
+        let baseWidth = customExpandedWidth > 0 ? CGFloat(customExpandedWidth) : CGFloat(SettingsDefaults.expandedWidth)
+        // Add 30px margin for the NotchPanelShape wing extensions (topExtension up to 14px each side)
+        let width = min(baseWidth + 30, screenW - 10)
         return NSSize(width: width, height: maxH)
     }
 
@@ -376,9 +379,12 @@ class PanelWindowController: NSObject, NSWindowDelegate {
     }
 
     private var lastDisplayChoice = ""
+    private var lastExpandedWidth = 0.0
+    private var expandedWidthCollapseTimer: Timer?
 
     private func observeSettingsChanges() {
         lastDisplayChoice = SettingsManager.shared.displayChoice
+        lastExpandedWidth = SettingsManager.shared.expandedWidth
         let observer = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,
             object: nil,
@@ -392,6 +398,28 @@ class PanelWindowController: NSObject, NSWindowDelegate {
                     self.refreshCurrentScreen(forceRebuild: true)
                     self.configureAutoScreenPolling()
                 } else {
+                    // Auto-expand when expanded width setting changes, auto-collapse when done
+                    let newExpandedWidth = SettingsManager.shared.expandedWidth
+                    if newExpandedWidth != self.lastExpandedWidth {
+                        self.lastExpandedWidth = newExpandedWidth
+                        if self.appState.surface == .collapsed {
+                            withAnimation(NotchAnimation.open) {
+                                self.appState.surface = .sessionList
+                            }
+                        }
+                        // Reset collapse timer — fires after user stops dragging
+                        self.expandedWidthCollapseTimer?.invalidate()
+                        self.expandedWidthCollapseTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { _ in
+                            Task { @MainActor [weak self] in
+                                guard let self = self else { return }
+                                if self.appState.surface == .sessionList {
+                                    withAnimation(NotchAnimation.close) {
+                                        self.appState.surface = .collapsed
+                                    }
+                                }
+                            }
+                        }
+                    }
                     self.updateVisibility()
                     self.updatePosition()
                 }

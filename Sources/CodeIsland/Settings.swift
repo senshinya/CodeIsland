@@ -60,6 +60,9 @@ enum SettingsKey {
 
     // Mascot
     static let mascotSpeed = "mascotSpeed"
+    static let mascotSpeedProcessing = "mascotSpeedProcessing"
+    static let mascotSpeedIdle = "mascotSpeedIdle"
+    static let mascotSpeedWaiting = "mascotSpeedWaiting"
 
     // Session grouping
     static let sessionGroupingMode = "sessionGroupingMode"
@@ -67,6 +70,13 @@ enum SettingsKey {
     // Tool status display
     static let showToolStatus = "showToolStatus"              // true = detailed, false = simple
 
+    // Panel size adjustments
+    static let collapsedWidthOffset = "collapsedWidthOffset"     // Legacy: migrated to idle/working
+    static let collapsedWidthOffsetIdle = "collapsedWidthOffsetIdle"
+    static let collapsedWidthOffsetWorking = "collapsedWidthOffsetWorking"
+    static let collapsedWidthPreview = "collapsedWidthPreview"   // Transient: "" / "idle" / "working"
+    static let expandedWidth = "expandedWidth"                   // Double absolute width; 0 = use default
+    static let collapsedHeightOffset = "collapsedHeightOffset"   // Double offset from default collapsed height
 }
 
 struct SettingsDefaults {
@@ -98,11 +108,20 @@ struct SettingsDefaults {
 
     static let maxToolHistory = 20
 
-    static let mascotSpeed = 100  // percentage: 0–300, 0 = silent
+    static let mascotSpeed = 100  // percentage: 0–300, 0 = silent (legacy global fallback)
+    static let mascotSpeedProcessing = -1  // -1 = use global mascotSpeed
+    static let mascotSpeedIdle = -1
+    static let mascotSpeedWaiting = -1
 
     static let sessionGroupingMode = "all"
 
     static let showToolStatus = true
+
+    static let collapsedWidthOffset = 0.0   // Legacy
+    static let collapsedWidthOffsetIdle = 0.0
+    static let collapsedWidthOffsetWorking = 0.0
+    static let expandedWidth = 600.0
+    static let collapsedHeightOffset = 0.0
 }
 
 @MainActor
@@ -137,9 +156,25 @@ class SettingsManager {
             SettingsKey.rotationInterval: SettingsDefaults.rotationInterval,
             SettingsKey.maxToolHistory: SettingsDefaults.maxToolHistory,
             SettingsKey.mascotSpeed: SettingsDefaults.mascotSpeed,
+            SettingsKey.mascotSpeedProcessing: SettingsDefaults.mascotSpeedProcessing,
+            SettingsKey.mascotSpeedIdle: SettingsDefaults.mascotSpeedIdle,
+            SettingsKey.mascotSpeedWaiting: SettingsDefaults.mascotSpeedWaiting,
             SettingsKey.sessionGroupingMode: SettingsDefaults.sessionGroupingMode,
             SettingsKey.showToolStatus: SettingsDefaults.showToolStatus,
+            SettingsKey.collapsedWidthOffset: SettingsDefaults.collapsedWidthOffset,
+            SettingsKey.collapsedWidthOffsetIdle: SettingsDefaults.collapsedWidthOffsetIdle,
+            SettingsKey.collapsedWidthOffsetWorking: SettingsDefaults.collapsedWidthOffsetWorking,
+            SettingsKey.expandedWidth: SettingsDefaults.expandedWidth,
+            SettingsKey.collapsedHeightOffset: SettingsDefaults.collapsedHeightOffset,
         ])
+
+        // Migrate legacy collapsedWidthOffset → per-state keys
+        if defaults.object(forKey: SettingsKey.collapsedWidthOffsetIdle) == nil,
+           defaults.object(forKey: SettingsKey.collapsedWidthOffsetWorking) == nil,
+           let legacy = defaults.object(forKey: SettingsKey.collapsedWidthOffset) as? Double, legacy != 0 {
+            defaults.set(legacy, forKey: SettingsKey.collapsedWidthOffsetIdle)
+            defaults.set(legacy, forKey: SettingsKey.collapsedWidthOffsetWorking)
+        }
     }
 
     var launchAtLogin: Bool {
@@ -222,6 +257,31 @@ class SettingsManager {
     var sessionGroupingMode: String {
         get { defaults.string(forKey: SettingsKey.sessionGroupingMode) ?? SettingsDefaults.sessionGroupingMode }
         set { defaults.set(newValue, forKey: SettingsKey.sessionGroupingMode) }
+    }
+
+    var collapsedWidthOffset: Double {
+        get { defaults.double(forKey: SettingsKey.collapsedWidthOffset) }
+        set { defaults.set(newValue, forKey: SettingsKey.collapsedWidthOffset) }
+    }
+
+    var collapsedWidthOffsetIdle: Double {
+        get { defaults.double(forKey: SettingsKey.collapsedWidthOffsetIdle) }
+        set { defaults.set(newValue, forKey: SettingsKey.collapsedWidthOffsetIdle) }
+    }
+
+    var collapsedWidthOffsetWorking: Double {
+        get { defaults.double(forKey: SettingsKey.collapsedWidthOffsetWorking) }
+        set { defaults.set(newValue, forKey: SettingsKey.collapsedWidthOffsetWorking) }
+    }
+
+    var expandedWidth: Double {
+        get { defaults.double(forKey: SettingsKey.expandedWidth) }
+        set { defaults.set(newValue, forKey: SettingsKey.expandedWidth) }
+    }
+
+    var collapsedHeightOffset: Double {
+        get { defaults.double(forKey: SettingsKey.collapsedHeightOffset) }
+        set { defaults.set(newValue, forKey: SettingsKey.collapsedHeightOffset) }
     }
 }
 
