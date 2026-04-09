@@ -577,8 +577,8 @@ private struct UsageInfoBar: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Text("Claude")
-                .foregroundStyle(.white.opacity(0.7))
+            ClaudeLogo(size: fs)
+                .opacity(0.7)
 
             Text("5h")
                 .foregroundStyle(.white.opacity(0.9))
