@@ -130,6 +130,11 @@ struct SessionChatView: View {
                 LazyVStack(alignment: .leading, spacing: 4) {
                     ForEach(visibleMessages) { msg in
                         messageRow(msg)
+                            .id(msg.id)
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .bottom).combined(with: .opacity),
+                                removal: .opacity
+                            ))
                     }
                     Color.clear.frame(height: 1).id("chat_bottom")
                 }
@@ -472,7 +477,13 @@ struct SessionChatView: View {
     @MainActor
     private func applyParsedMessages(_ parsed: [SessionChatMessage]) {
         if parsed != messages {
-            messages = parsed
+            if shouldAnimateMessageInsertion(from: messages, to: parsed) {
+                withAnimation(.spring(response: 0.24, dampingFraction: 0.88)) {
+                    messages = parsed
+                }
+            } else {
+                messages = parsed
+            }
         }
         reconcilePendingMessages(with: parsed)
     }
@@ -486,7 +497,9 @@ struct SessionChatView: View {
             text: text,
             timestamp: Date()
         )
-        pendingUserMessages.append(pendingMessage)
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.88)) {
+            pendingUserMessages.append(pendingMessage)
+        }
         messageInput = ""
         Task { @MainActor in
             if watchedTranscriptPath == nil {
@@ -526,11 +539,21 @@ struct SessionChatView: View {
             }
         }
 
-        pendingUserMessages = unresolved
+        if unresolved != pendingUserMessages {
+            withAnimation(.easeOut(duration: 0.18)) {
+                pendingUserMessages = unresolved
+            }
+        }
     }
 
     private func normalizedUserText(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func shouldAnimateMessageInsertion(from old: [SessionChatMessage], to new: [SessionChatMessage]) -> Bool {
+        guard !old.isEmpty else { return false }
+        let oldIds = Set(old.map(\.id))
+        return new.contains { !oldIds.contains($0.id) }
     }
 
     // MARK: - Helpers
