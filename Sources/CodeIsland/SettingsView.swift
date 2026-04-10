@@ -441,6 +441,7 @@ private struct AppearancePage: View {
     @AppStorage(SettingsKey.showAgentDetails) private var showAgentDetails = SettingsDefaults.showAgentDetails
     @AppStorage(SettingsKey.showToolStatus) private var showToolStatus = SettingsDefaults.showToolStatus
     @AppStorage(SettingsKey.showUsageInfo) private var showUsageInfo = SettingsDefaults.showUsageInfo
+    @AppStorage(SettingsKey.showCodexUsageInfo) private var showCodexUsageInfo = SettingsDefaults.showCodexUsageInfo
     @AppStorage(SettingsKey.collapsedWidthOffsetIdle) private var collapsedWidthOffsetIdle = SettingsDefaults.collapsedWidthOffsetIdle
     @AppStorage(SettingsKey.collapsedWidthOffsetWorking) private var collapsedWidthOffsetWorking = SettingsDefaults.collapsedWidthOffsetWorking
     @AppStorage(SettingsKey.collapsedWidthPreview) private var collapsedWidthPreview = ""
@@ -548,6 +549,13 @@ private struct AppearancePage: View {
                 Toggle(l10n["show_agent_details"], isOn: $showAgentDetails)
                 Toggle(l10n["show_tool_status"], isOn: $showToolStatus)
                 Toggle(l10n["show_usage_info"], isOn: $showUsageInfo)
+                    .onChange(of: showUsageInfo) { _, enabled in
+                        if enabled { showCodexUsageInfo = false }
+                    }
+                Toggle(l10n["show_codex_usage_info"], isOn: $showCodexUsageInfo)
+                    .onChange(of: showCodexUsageInfo) { _, enabled in
+                        if enabled { showUsageInfo = false }
+                    }
             }
         }
         .formStyle(.grouped)

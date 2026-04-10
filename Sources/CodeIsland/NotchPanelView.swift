@@ -14,6 +14,7 @@ struct NotchPanelView: View {
     @AppStorage(SettingsKey.hideWhenNoSession) private var hideWhenNoSession = SettingsDefaults.hideWhenNoSession
     @AppStorage(SettingsKey.showToolStatus) private var showToolStatus = SettingsDefaults.showToolStatus
     @AppStorage(SettingsKey.showUsageInfo) private var showUsageInfo = SettingsDefaults.showUsageInfo
+    @AppStorage(SettingsKey.showCodexUsageInfo) private var showCodexUsageInfo = SettingsDefaults.showCodexUsageInfo
     @AppStorage(SettingsKey.collapsedWidthOffsetIdle) private var collapsedWidthOffsetIdle = SettingsDefaults.collapsedWidthOffsetIdle
     @AppStorage(SettingsKey.collapsedWidthOffsetWorking) private var collapsedWidthOffsetWorking = SettingsDefaults.collapsedWidthOffsetWorking
     @AppStorage(SettingsKey.collapsedWidthPreview) private var collapsedWidthPreview = ""
@@ -217,11 +218,13 @@ struct NotchPanelView: View {
             }
             .onAppear {
                 displayedToolStatus = showToolStatus
-                if showUsageInfo { UsageTracker.shared.startPolling() }
+                configureUsagePolling()
             }
-            .onChange(of: showUsageInfo) { _, enabled in
-                if enabled { UsageTracker.shared.startPolling() }
-                else { UsageTracker.shared.stopPolling() }
+            .onChange(of: showUsageInfo) { _, _ in
+                configureUsagePolling()
+            }
+            .onChange(of: showCodexUsageInfo) { _, _ in
+                configureUsagePolling()
             }
             .onChange(of: appState.surface) { _, surface in
                 if case .chatHistory = surface {
@@ -328,6 +331,19 @@ struct NotchPanelView: View {
         .animation(.easeInOut(duration: 0.15), value: expandedWidth)
         .animation(.easeInOut(duration: 0.15), value: collapsedHeightOffset)
     }
+
+    private func configureUsagePolling() {
+        if showUsageInfo && !showCodexUsageInfo {
+            CodexUsageTracker.shared.stopPolling()
+            UsageTracker.shared.startPolling()
+        } else if showCodexUsageInfo && !showUsageInfo {
+            UsageTracker.shared.stopPolling()
+            CodexUsageTracker.shared.startPolling()
+        } else {
+            UsageTracker.shared.stopPolling()
+            CodexUsageTracker.shared.stopPolling()
+        }
+    }
 }
 
 
@@ -342,7 +358,9 @@ private struct CompactLeftWing: View {
     let showToolStatus: Bool
     @AppStorage(SettingsKey.sessionGroupingMode) private var groupingMode = SettingsDefaults.sessionGroupingMode
     @AppStorage(SettingsKey.showUsageInfo) private var showUsageInfo = SettingsDefaults.showUsageInfo
+    @AppStorage(SettingsKey.showCodexUsageInfo) private var showCodexUsageInfo = SettingsDefaults.showCodexUsageInfo
     @ObservedObject private var usageTracker = UsageTracker.shared
+    @ObservedObject private var codexUsageTracker = CodexUsageTracker.shared
 
     private var displaySession: SessionSnapshot? {
         let sid = appState.rotatingSessionId ?? appState.activeSessionId ?? appState.sessions.keys.sorted().first
@@ -358,8 +376,10 @@ private struct CompactLeftWing: View {
     var body: some View {
         HStack(spacing: 6) {
             if expanded {
-                if showUsageInfo && usageTracker.isAvailable {
+                if showUsageInfo && !showCodexUsageInfo && usageTracker.isAvailable {
                     UsageInfoBar(data: usageTracker.data)
+                } else if showCodexUsageInfo && !showUsageInfo && codexUsageTracker.isAvailable {
+                    CodexUsageInfoBar(data: codexUsageTracker.data)
                 }
             } else {
                 MascotView(source: displaySource, status: displayStatus, size: mascotSize)
@@ -635,6 +655,82 @@ private struct UsageInfoBar: View {
         .lineLimit(1)
         .fixedSize()
         .padding(.leading, 6)
+    }
+}
+
+private struct CodexUsageInfoBar: View {
+    let data: CodexUsageTracker.UsageData
+    private let green = Color(red: 0.3, green: 0.85, blue: 0.4)
+    private let orange = Color(red: 0.95, green: 0.6, blue: 0.2)
+    private let dimWhite = Color.white.opacity(0.5)
+    private let fs: CGFloat = 11
+
+    private func usageColor(_ pct: Double) -> Color {
+        if pct >= 80 { return Color(red: 1.0, green: 0.35, blue: 0.3) }
+        if pct >= 50 { return orange }
+        return green
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            OpenAILogo(size: fs)
+                .opacity(0.7)
+
+            if let primary = data.primary {
+                Text(primary.label)
+                    .foregroundStyle(.white.opacity(0.9))
+                Text(String(format: "%.0f%%", primary.utilization))
+                    .foregroundStyle(usageColor(primary.utilization))
+                    .fontWeight(.bold)
+                Text(UsageTracker.formatTimeRemaining(primary.resetsAt))
+                    .foregroundStyle(dimWhite)
+            }
+
+            if data.primary != nil && data.secondary != nil {
+                Text("|")
+                    .foregroundStyle(.white.opacity(0.25))
+            }
+
+            if let secondary = data.secondary {
+                Text(secondary.label)
+                    .foregroundStyle(.white.opacity(0.9))
+                Text(String(format: "%.0f%%", secondary.utilization))
+                    .foregroundStyle(usageColor(secondary.utilization))
+                    .fontWeight(.bold)
+                Text(UsageTracker.formatTimeRemaining(secondary.resetsAt))
+                    .foregroundStyle(dimWhite)
+            }
+        }
+        .font(.system(size: fs, weight: .medium, design: .monospaced))
+        .lineLimit(1)
+        .fixedSize()
+        .padding(.leading, 6)
+    }
+}
+
+private struct OpenAILogo: View {
+    let size: CGFloat
+
+    var body: some View {
+        OpenAILogoShape()
+            .fill(.white)
+            .frame(width: size, height: size)
+    }
+}
+
+private struct OpenAILogoShape: Shape {
+    fileprivate static let svgPath = "M60.8734 57.2556v-14.9432c0-1.2586.4722-2.2029 1.5728-2.8314l30.0443-17.3023c4.0899-2.3593 8.9662-3.4599 13.9988-3.4599 18.8759 0 30.8307 14.6289 30.8307 30.2006 0 1.1007 0 2.3593-.158 3.6178l-31.1446-18.2467c-1.8872-1.1006-3.7754-1.1006-5.6629 0l-39.4812 22.9651ZM131.0276 115.4561v-35.7074c0-2.2028-.9446-3.7756-2.8318-4.8763l-39.481-22.9651 12.8982-7.3934c1.1007-.6285 2.0453-.6285 3.1458 0l30.0441 17.3024c8.6523 5.0341 14.4708 15.7296 14.4708 26.1107 0 11.9539-7.0769 22.965-18.2461 27.527v.0021ZM51.593 83.9964l-12.8982-7.5497c-1.1007-.6285-1.5728-1.5728-1.5728-2.8314v-34.6048c0-16.8303 12.8982-29.5722 30.3585-29.5722 6.607 0 12.7403 2.2029 17.9324 6.1349l-30.987 17.9324c-1.8871 1.1007-2.8314 2.6735-2.8314 4.8764v45.6159l-.0014-.0015ZM79.3562 100.0403l-18.4829-10.3811v-22.0209l18.4829-10.3811 18.4812 10.3811v22.0209l-18.4812 10.3811ZM91.2319 147.8591c-6.607 0-12.7403-2.2031-17.9324-6.1344l30.9866-17.9333c1.8872-1.1005 2.8318-2.6728 2.8318-4.8759v-45.616l13.0564 7.5498c1.1005.6285 1.5723 1.5728 1.5723 2.8314v34.6051c0 16.8297-13.0564 29.5723-30.5147 29.5723v.001ZM53.9522 112.7822l-30.0443-17.3024c-8.652-5.0343-14.471-15.7296-14.471-26.1107 0-12.1119 7.2356-22.9652 18.403-27.5272v35.8634c0 2.2028.9443 3.7756 2.8314 4.8763l39.3248 22.8068-12.8982 7.3938c-1.1007.6287-2.045.6287-3.1456 0ZM52.2229 138.5791c-17.7745 0-30.8306-13.3713-30.8306-29.8871 0-1.2585.1578-2.5169.3143-3.7754l30.987 17.9323c1.8871 1.1005 3.7757 1.1005 5.6628 0l39.4811-22.807v14.9435c0 1.2585-.4721 2.2021-1.5728 2.8308l-30.0443 17.3025c-4.0898 2.359-8.9662 3.4605-13.9989 3.4605h.0014ZM91.2319 157.296c19.0327 0 34.9188-13.5272 38.5383-31.4594 17.6164-4.562 28.9425-21.0779 28.9425-37.908 0-11.0112-4.719-21.7066-13.2133-29.4143.7867-3.3035 1.2595-6.607 1.2595-9.909 0-22.4929-18.2471-39.3247-39.3251-39.3247-4.2461 0-8.3363.6285-12.4262 2.045-7.0792-6.9213-16.8318-11.3254-27.5271-11.3254-19.0331 0-34.9191 13.5268-38.5384 31.4591C11.3255 36.0212 0 52.5373 0 69.3675c0 11.0112 4.7184 21.7065 13.2125 29.4142-.7865 3.3035-1.2586 6.6067-1.2586 9.9092 0 22.4923 18.2466 39.3241 39.3248 39.3241 4.2462 0 8.3362-.6277 12.426-2.0441 7.0776 6.921 16.8302 11.3251 27.5271 11.3251Z"
+    private static let basePath: Path = ClaudeLogoShape.parseSVGPath(OpenAILogoShape.svgPath)
+
+    func path(in rect: CGRect) -> Path {
+        let width: CGFloat = 158.7128
+        let height: CGFloat = 157.296
+        let scale = min(rect.width / width, rect.height / height)
+        let xOffset = rect.minX + (rect.width - width * scale) / 2
+        let yOffset = rect.minY + (rect.height - height * scale) / 2
+        let transform = CGAffineTransform(scaleX: scale, y: scale)
+            .concatenating(CGAffineTransform(translationX: xOffset, y: yOffset))
+        return Self.basePath.applying(transform)
     }
 }
 
@@ -1675,7 +1771,7 @@ private struct ClaudeLogoShape: Shape {
     }
 
     // Minimal SVG path parser for m/l/h/v/c/z commands
-    private static func parseSVGPath(_ d: String) -> Path {
+    fileprivate static func parseSVGPath(_ d: String) -> Path {
         var path = Path()
         var x: CGFloat = 0, y: CGFloat = 0
         var i = d.startIndex

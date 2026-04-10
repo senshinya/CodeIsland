@@ -73,6 +73,7 @@ enum SettingsKey {
 
     // Usage display
     static let showUsageInfo = "showUsageInfo"
+    static let showCodexUsageInfo = "showCodexUsageInfo"
 
     // Panel size adjustments
     static let collapsedWidthOffset = "collapsedWidthOffset"     // Legacy: migrated to idle/working
@@ -122,6 +123,7 @@ struct SettingsDefaults {
     static let showToolStatus = true
 
     static let showUsageInfo = false
+    static let showCodexUsageInfo = false
 
     static let collapsedWidthOffset = 0.0   // Legacy
     static let collapsedWidthOffsetIdle = 0.0
@@ -168,6 +170,7 @@ class SettingsManager {
             SettingsKey.sessionGroupingMode: SettingsDefaults.sessionGroupingMode,
             SettingsKey.showToolStatus: SettingsDefaults.showToolStatus,
             SettingsKey.showUsageInfo: SettingsDefaults.showUsageInfo,
+            SettingsKey.showCodexUsageInfo: SettingsDefaults.showCodexUsageInfo,
             SettingsKey.collapsedWidthOffset: SettingsDefaults.collapsedWidthOffset,
             SettingsKey.collapsedWidthOffsetIdle: SettingsDefaults.collapsedWidthOffsetIdle,
             SettingsKey.collapsedWidthOffsetWorking: SettingsDefaults.collapsedWidthOffsetWorking,
