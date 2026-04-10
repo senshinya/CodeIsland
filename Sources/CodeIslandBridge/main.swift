@@ -89,6 +89,16 @@ func nonEmptyString(_ value: Any?) -> String? {
     return trimmed.isEmpty ? nil : trimmed
 }
 
+func envValue(_ primary: String, override: String? = nil, in env: [String: String]) -> String? {
+    if let override, let value = env[override]?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+        return value
+    }
+    if let value = env[primary]?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+        return value
+    }
+    return nil
+}
+
 func connectSocket(_ path: String) -> Int32? {
     let sock = socket(AF_UNIX, SOCK_STREAM, 0)
     guard sock >= 0 else { return nil }
@@ -248,16 +258,16 @@ debugLog("event=\(eventName) session=\(sessionId) permission=\(isPermission) que
 alarm(8)
 
 // --- Deep terminal environment collection ---
-// Terminal app identification (only include when present)
-if let termApp = env["TERM_PROGRAM"], !termApp.isEmpty {
+// Terminal app identification (prefer explicit tmux-safe overrides when present)
+if let termApp = envValue("TERM_PROGRAM", override: "CODEISLAND_TERM_PROGRAM", in: env) {
     json["_term_app"] = termApp
 }
-if let termBundle = env["__CFBundleIdentifier"], !termBundle.isEmpty {
+if let termBundle = envValue("__CFBundleIdentifier", override: "CODEISLAND_TERM_BUNDLE", in: env) {
     json["_term_bundle"] = termBundle
 }
 
 // iTerm2 session — extract GUID after "w0t0p0:" prefix for AppleScript matching
-if let iterm = env["ITERM_SESSION_ID"], !iterm.isEmpty {
+if let iterm = envValue("ITERM_SESSION_ID", override: "CODEISLAND_ITERM_SESSION_ID", in: env) {
     if let colonIdx = iterm.firstIndex(of: ":") {
         json["_iterm_session"] = String(iterm[iterm.index(after: colonIdx)...])
     } else {
@@ -266,14 +276,14 @@ if let iterm = env["ITERM_SESSION_ID"], !iterm.isEmpty {
 }
 
 // Kitty window
-if let kitty = env["KITTY_WINDOW_ID"], !kitty.isEmpty {
+if let kitty = envValue("KITTY_WINDOW_ID", override: "CODEISLAND_KITTY_WINDOW_ID", in: env) {
     json["_kitty_window"] = kitty
 }
 
 // tmux detection — deep info collection
-if let tmux = env["TMUX"], !tmux.isEmpty {
+if let tmux = envValue("TMUX", override: "CODEISLAND_TMUX", in: env) {
     json["_tmux"] = tmux
-    if let pane = env["TMUX_PANE"], !pane.isEmpty {
+    if let pane = envValue("TMUX_PANE", override: "CODEISLAND_TMUX_PANE", in: env) {
         json["_tmux_pane"] = pane
         // Get client TTY — use explicit path (hook PATH may lack homebrew)
         if let tmuxBin = findBinary("tmux"),

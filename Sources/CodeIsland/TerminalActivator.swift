@@ -1,14 +1,21 @@
 import AppKit
 import CodeIslandCore
+import Darwin
 
 /// Activates the terminal window/tab running a specific Claude Code session.
 /// Supports tab-level switching for: Ghostty, iTerm2, Terminal.app, WezTerm, kitty.
 /// Falls back to app-level activation for: Alacritty, Warp, Hyper, Tabby, Rio.
 struct TerminalActivator {
+    private struct ResolvedTerminal {
+        let name: String
+        let bundleId: String
+    }
+
     private static let knownTerminals: [(name: String, bundleId: String)] = [
         ("cmux", "com.cmuxterm.app"),
         ("Ghostty", "com.mitchellh.ghostty"),
         ("iTerm2", "com.googlecode.iterm2"),
+        ("Kaku", "fun.tw93.kaku"),
         ("WezTerm", "com.github.wez.wezterm"),
         ("kitty", "net.kovidgoyal.kitty"),
         ("Alacritty", "org.alacritty"),
@@ -33,8 +40,13 @@ struct TerminalActivator {
     ]
 
     static func activate(session: SessionSnapshot, sessionId: String? = nil) {
+        let tmuxResolvedTerminal = session.tmuxPane.flatMap { pane in
+            pane.isEmpty ? nil : resolveTmuxHostTerminal(session)
+        }
+        let effectiveBundleId = session.termBundleId ?? tmuxResolvedTerminal?.bundleId
+
         // Native app by bundle ID (e.g. Codex APP vs Codex CLI)
-        if let bundleId = session.termBundleId,
+        if let bundleId = effectiveBundleId,
            nativeAppBundles[bundleId] != nil {
             activateByBundleId(bundleId)
             return
@@ -42,7 +54,7 @@ struct TerminalActivator {
 
         // IDE integrated terminal: bring the IDE to front (no tab-level switching)
         if session.isIDETerminal,
-           let bundleId = session.termBundleId {
+           let bundleId = effectiveBundleId {
             activateByBundleId(bundleId)
             return
         }
@@ -62,9 +74,11 @@ struct TerminalActivator {
 
         // Resolve terminal: bundle ID (most accurate) → TERM_PROGRAM → scan running apps
         let termApp: String
-        if let bundleId = session.termBundleId,
+        if let bundleId = effectiveBundleId,
            let resolved = knownTerminals.first(where: { $0.bundleId == bundleId })?.name {
             termApp = resolved
+        } else if let resolved = tmuxResolvedTerminal {
+            termApp = resolved.name
         } else {
             let raw = session.termApp ?? ""
             // "tmux" / "screen" etc. are not GUI apps — fall back to scanning
@@ -100,6 +114,11 @@ struct TerminalActivator {
             return
         }
 
+        if lower == "kaku" || effectiveBundleId == "fun.tw93.kaku" {
+            activateKaku(ttyPath: effectiveTty, cwd: session.cwd, source: session.source)
+            return
+        }
+
         if lower == "ghostty" {
             activateGhostty(
                 cwd: session.cwd,
@@ -112,7 +131,7 @@ struct TerminalActivator {
         }
 
         // Match Terminal.app by bundle ID only — Warp sets TERM_PROGRAM=Apple_Terminal
-        if session.termBundleId == "com.apple.Terminal" || (session.termBundleId == nil && lower == "terminal") {
+        if effectiveBundleId == "com.apple.Terminal" || (effectiveBundleId == nil && lower == "terminal") {
             activateTerminalApp(ttyPath: effectiveTty, cwd: session.cwd)
             return
         }
@@ -124,6 +143,13 @@ struct TerminalActivator {
 
         if lower.contains("kitty") {
             activateKitty(windowId: session.kittyWindowId, cwd: session.cwd, source: session.source)
+            return
+        }
+
+        // Unknown but explicit terminal app bundle: app-level activation is still better
+        // than falling back to a guessed running terminal.
+        if let bundleId = effectiveBundleId, !bundleId.isEmpty {
+            activateByBundleId(bundleId)
             return
         }
 
@@ -447,6 +473,51 @@ struct TerminalActivator {
 
     // MARK: - WezTerm (CLI: wezterm cli list + activate-tab)
 
+    private struct KakuPaneInfo: Decodable {
+        let tab_id: Int
+        let pane_id: Int
+        let title: String?
+        let cwd: String?
+        let tty_name: String?
+        let is_active: Bool?
+    }
+
+    private static func activateKaku(ttyPath: String?, cwd: String?, source: String = "claude") {
+        activateByBundleId("fun.tw93.kaku")
+        guard let bin = findBinary("kaku") else { return }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let data = runProcess(bin, args: ["cli", "list", "--format", "json"]),
+                  let panes = try? JSONDecoder().decode([KakuPaneInfo].self, from: data) else { return }
+
+            if let tty = ttyPath, !tty.isEmpty,
+               let pane = panes.first(where: { $0.tty_name == tty }) {
+                _ = runProcess(bin, args: ["cli", "activate-tab", "--tab-id", "\(pane.tab_id)"])
+                _ = runProcess(bin, args: ["cli", "activate-pane", "--pane-id", "\(pane.pane_id)"])
+                return
+            }
+
+            let normalizedCwd = cwd.flatMap(normalizeFileURLPath)
+            let normalizedSource = source.lowercased()
+
+            let bestPane = panes.first(where: { pane in
+                let paneCwd = normalizeFileURLPath(pane.cwd)
+                let title = (pane.title ?? "").lowercased()
+                let cwdMatches = normalizedCwd != nil && paneCwd == normalizedCwd
+                let titleMatches = !normalizedSource.isEmpty && title.contains(normalizedSource)
+                return cwdMatches && titleMatches
+            }) ?? panes.first(where: { pane in
+                let paneCwd = normalizeFileURLPath(pane.cwd)
+                return normalizedCwd != nil && paneCwd == normalizedCwd
+            })
+
+            if let pane = bestPane {
+                _ = runProcess(bin, args: ["cli", "activate-tab", "--tab-id", "\(pane.tab_id)"])
+                _ = runProcess(bin, args: ["cli", "activate-pane", "--pane-id", "\(pane.pane_id)"])
+            }
+        }
+    }
+
     private static func activateWezTerm(ttyPath: String?, cwd: String?) {
         bringToFront("WezTerm")
         guard let bin = findBinary("wezterm") else { return }
@@ -507,6 +578,109 @@ struct TerminalActivator {
         }
     }
 
+    private static func resolveTmuxHostTerminal(_ session: SessionSnapshot) -> ResolvedTerminal? {
+        guard let pane = session.tmuxPane?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !pane.isEmpty,
+              let tmuxBin = findBinary("tmux"),
+              let data = runProcess(
+                tmuxBin,
+                args: ["display-message", "-p", "-t", pane, "-F", "#{client_pid}"],
+                env: tmuxProcessEnv(session.tmuxEnv)
+              ),
+              let pidString = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              let clientPid = Int32(pidString),
+              clientPid > 0
+        else {
+            return nil
+        }
+
+        return resolveTerminalFromProcessTree(startingAt: clientPid)
+    }
+
+    private static func resolveTerminalFromProcessTree(startingAt pid: Int32) -> ResolvedTerminal? {
+        var current = pid
+        var visited = Set<Int32>()
+
+        for _ in 0..<12 {
+            guard current > 1, !visited.contains(current) else { break }
+            visited.insert(current)
+
+            if let app = NSRunningApplication(processIdentifier: current),
+               let bundleId = app.bundleIdentifier,
+               !bundleId.isEmpty {
+                if let resolved = knownTerminals.first(where: { $0.bundleId == bundleId }) {
+                    return ResolvedTerminal(name: resolved.name, bundleId: bundleId)
+                }
+                let name = app.localizedName?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return ResolvedTerminal(name: (name?.isEmpty == false ? name! : bundleId), bundleId: bundleId)
+            }
+
+            if let command = processCommand(current),
+               let resolved = matchTerminal(fromProcessCommand: command) {
+                return resolved
+            }
+
+            guard let parent = parentPID(of: current), parent > 1 else { break }
+            current = parent
+        }
+
+        return nil
+    }
+
+    private static func parentPID(of pid: Int32) -> Int32? {
+        guard let data = runProcess("/bin/ps", args: ["-o", "ppid=", "-p", "\(pid)"]),
+              let output = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              let parent = Int32(output),
+              parent > 0 else {
+            return nil
+        }
+        return parent
+    }
+
+    private static func processCommand(_ pid: Int32) -> String? {
+        guard let data = runProcess("/bin/ps", args: ["-o", "comm=", "-p", "\(pid)"]),
+              let output = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !output.isEmpty else {
+            return nil
+        }
+        return output
+    }
+
+    private static func matchTerminal(fromProcessCommand command: String) -> ResolvedTerminal? {
+        let lower = command.lowercased()
+        if lower.contains("kaku") {
+            return ResolvedTerminal(name: "Kaku", bundleId: "fun.tw93.kaku")
+        }
+        if lower.contains("ghostty") {
+            return ResolvedTerminal(name: "Ghostty", bundleId: "com.mitchellh.ghostty")
+        }
+        if lower.contains("iterm") {
+            return ResolvedTerminal(name: "iTerm2", bundleId: "com.googlecode.iterm2")
+        }
+        if lower.contains("wezterm") {
+            return ResolvedTerminal(name: "WezTerm", bundleId: "com.github.wez.wezterm")
+        }
+        if lower.contains("kitty") {
+            return ResolvedTerminal(name: "kitty", bundleId: "net.kovidgoyal.kitty")
+        }
+        if lower.contains("alacritty") {
+            return ResolvedTerminal(name: "Alacritty", bundleId: "org.alacritty")
+        }
+        if lower.contains("warp") {
+            return ResolvedTerminal(name: "Warp", bundleId: "dev.warp.Warp-Stable")
+        }
+        if lower.hasSuffix("/terminal") || lower == "terminal" || lower.contains("apple_terminal") {
+            return ResolvedTerminal(name: "Terminal", bundleId: "com.apple.Terminal")
+        }
+        if lower.contains("cmux") {
+            return ResolvedTerminal(name: "cmux", bundleId: "com.cmuxterm.app")
+        }
+        return nil
+    }
+
     // MARK: - Activate by bundle ID
 
     private static func activateByBundleId(_ bundleId: String) {
@@ -515,8 +689,9 @@ struct TerminalActivator {
         }) {
             if app.isHidden { app.unhide() }
             app.activate()
+            return
         }
-        // Also use openApplication for reliable Space switching (Electron apps like VSCode)
+        // App not running yet: launch it by bundle ID.
         if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
             NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
         }
@@ -597,10 +772,13 @@ struct TerminalActivator {
 
     /// Find a CLI binary in common paths (Homebrew Intel + Apple Silicon, system)
     private static func findBinary(_ name: String) -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
         let paths = [
             "/opt/homebrew/bin/\(name)",
             "/usr/local/bin/\(name)",
             "/usr/bin/\(name)",
+            "\(home)/.local/bin/\(name)",
+            "\(home)/.config/kaku/zsh/bin/\(name)",
         ]
         return paths.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
@@ -634,5 +812,14 @@ struct TerminalActivator {
         guard let tmuxEnv = tmuxEnv?.trimmingCharacters(in: .whitespacesAndNewlines),
               !tmuxEnv.isEmpty else { return nil }
         return ["TMUX": tmuxEnv]
+    }
+
+    private static func normalizeFileURLPath(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+        if value.hasPrefix("file://") {
+            return URL(string: value)?.path
+        }
+        return value
     }
 }

@@ -1,5 +1,6 @@
 import SwiftUI
 import CodeIslandCore
+import Darwin
 
 /// Chat history view for a Claude Code session — shows messages from the JSONL transcript
 /// and allows sending new messages via the session's terminal.
@@ -8,14 +9,21 @@ struct SessionChatView: View {
     let session: SessionSnapshot
     var appState: AppState
     @State private var messages: [SessionChatMessage] = []
+    @State private var pendingUserMessages: [SessionChatMessage] = []
     @State private var messageInput = ""
     @State private var isLoading = true
-    @State private var autoRefreshTask: Task<Void, Never>?
+    @State private var fileWatchSource: DispatchSourceFileSystemObject?
+    @State private var watchedFileDescriptor: Int32 = -1
+    @State private var watchedTranscriptPath: String?
+    @State private var watcherReloadTask: Task<Void, Never>?
+    @State private var transcriptDiscoveryTask: Task<Void, Never>?
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
     @AppStorage(SettingsKey.maxPanelHeight) private var maxPanelHeight = SettingsDefaults.maxPanelHeight
 
     private var fontSize: CGFloat { CGFloat(contentFontSize) }
     private let accent = Color(red: 0.85, green: 0.47, blue: 0.34)
+    private let toolGreen = Color(red: 0.40, green: 0.88, blue: 0.62)
+    private var displayedMessages: [SessionChatMessage] { messages + pendingUserMessages }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,7 +40,7 @@ struct SessionChatView: View {
                     .font(.system(size: fontSize, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.25))
                 Spacer()
-            } else if messages.isEmpty {
+            } else if displayedMessages.isEmpty {
                 Spacer()
                 Text(L10n.shared["chat_empty"])
                     .font(.system(size: fontSize, design: .monospaced))
@@ -47,7 +55,13 @@ struct SessionChatView: View {
             }
         }
         .onAppear { loadMessages() }
-        .onDisappear { autoRefreshTask?.cancel() }
+        .onDisappear { stopWatchingTranscript() }
+        .onChange(of: session.providerSessionId) { _, _ in
+            refreshTranscriptBindingIfNeeded()
+        }
+        .onChange(of: session.cwd) { _, _ in
+            refreshTranscriptBindingIfNeeded()
+        }
     }
 
     // MARK: - Header
@@ -96,21 +110,21 @@ struct SessionChatView: View {
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(messages) { msg in
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(displayedMessages) { msg in
                         messageRow(msg)
                     }
                     Color.clear.frame(height: 1).id("chat_bottom")
                 }
-                .padding(.horizontal, 14)
-                .padding(.top, 10)
-                .padding(.bottom, 6)
+                .padding(.horizontal, 18)
+                .padding(.top, 14)
+                .padding(.bottom, 10)
             }
             .frame(maxHeight: chatMaxHeight)
             .onAppear {
                 proxy.scrollTo("chat_bottom", anchor: .bottom)
             }
-            .onChange(of: messages.count) { _, _ in
+            .onChange(of: displayedMessages) { _, _ in
                 withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo("chat_bottom", anchor: .bottom)
                 }
@@ -132,62 +146,80 @@ struct SessionChatView: View {
             userRow(msg.text)
         case .assistant:
             assistantRow(msg.text)
-        case .tool:
-            toolRow(msg.text)
+        case .tool(let name):
+            toolRow(msg.text, name: name)
         }
     }
 
-    /// User message — right-aligned dark bubble
+    /// User message — right-aligned bubble, width fits content, max ~container-50
     private func userRow(_ text: String) -> some View {
         HStack {
-            Spacer(minLength: 50)
+            Spacer(minLength: 72)
             Text(text)
-                .font(.system(size: fontSize, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.9))
-                .multilineTextAlignment(.trailing)
+                .font(.system(size: fontSize + 1, weight: .regular, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.94))
+                .multilineTextAlignment(.leading)
                 .lineLimit(nil)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
                 .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(.white.opacity(0.10))
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(.white.opacity(0.13))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                .strokeBorder(.white.opacity(0.08), lineWidth: 1)
+                        )
                 )
+                .frame(maxWidth: 520, alignment: .trailing)
         }
-        .padding(.top, 10)
-        .padding(.bottom, 4)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
     }
 
-    /// Assistant message — left-aligned with ◇ marker
+    /// Assistant message — left-aligned with ● marker
     private func assistantRow(_ text: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text("◇")
-                .font(.system(size: fontSize, weight: .medium, design: .monospaced))
-                .foregroundStyle(accent.opacity(0.65))
+        HStack(alignment: .top, spacing: 10) {
+            Text("●")
+                .font(.system(size: max(7, fontSize * 0.62), weight: .regular, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.82))
+                .padding(.top, 4)
             Text(renderMarkdown(chatStripDirectives(text)))
-                .font(.system(size: fontSize, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.85))
+                .font(.system(size: fontSize + 2, weight: .regular, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.9))
                 .lineLimit(nil)
+                .lineSpacing(4)
                 .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 16)
         }
-        .padding(.top, 10)
-        .padding(.bottom, 2)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
     }
 
-    /// Tool call — compact muted row
-    private func toolRow(_ text: String) -> some View {
-        HStack(spacing: 5) {
-            Text("▸")
-                .font(.system(size: fontSize - 2, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.2))
-            Text(text)
-                .font(.system(size: fontSize - 1.5, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.3))
-                .lineLimit(1)
-                .truncationMode(.tail)
+    /// Tool call — same level as assistant, bold tool name
+    private func toolRow(_ text: String, name: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text("●")
+                .font(.system(size: max(7, fontSize * 0.62), weight: .regular, design: .monospaced))
+                .foregroundStyle(toolGreen)
+                .padding(.top, 3)
+            toolText(text, name: name)
+            Spacer(minLength: 16)
         }
-        .padding(.leading, 20)
-        .padding(.vertical, 1)
+        .padding(.top, 6)
+        .padding(.bottom, 6)
+    }
+
+    /// Renders tool text with bold name prefix
+    private func toolText(_ text: String, name: String) -> Text {
+        let desc = String(text.dropFirst(name.count).drop(while: { $0 == ":" || $0 == " " }))
+        return Text(name)
+            .font(.system(size: fontSize + 1, weight: .medium, design: .monospaced))
+            .foregroundColor(.white.opacity(0.96))
+        +
+        Text(desc.isEmpty ? "" : " " + desc)
+            .font(.system(size: fontSize + 1, weight: .regular, design: .monospaced))
+            .foregroundColor(.white.opacity(0.48))
     }
 
     // MARK: - Input Bar
@@ -197,67 +229,237 @@ struct SessionChatView: View {
     }
 
     private var inputBar: some View {
-        VStack(spacing: 0) {
-            Rectangle()
-                .fill(.white.opacity(0.06))
-                .frame(height: 0.5)
-
-            ChatInputEditor(
-                text: $messageInput,
-                font: .monospacedSystemFont(ofSize: fontSize, weight: .regular),
-                placeholderText: L10n.shared["chat_placeholder"],
-                onSubmit: sendMessage
-            )
-            .frame(minHeight: 28, maxHeight: 80)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-        }
+        ChatInputEditor(
+            text: $messageInput,
+            font: .monospacedSystemFont(ofSize: fontSize + 1, weight: .regular),
+            placeholderText: L10n.shared["chat_placeholder"],
+            onSubmit: sendMessage
+        )
+        .frame(height: 24)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(.white.opacity(0.09))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .strokeBorder(.white.opacity(0.16), lineWidth: 1.2)
+                )
+        )
+        .padding(.horizontal, 18)
+        .padding(.top, 10)
+        .padding(.bottom, 14)
     }
 
     // MARK: - Actions
 
+    private var effectiveTranscriptPath: String? {
+        ClaudeSessionReader.jsonlPath(sessionId: session.providerSessionId ?? sessionId, cwd: session.cwd)
+    }
+
     private func loadMessages() {
         isLoading = true
-        let effectiveId = session.providerSessionId ?? sessionId
-        let cwd = session.cwd
+        let path = effectiveTranscriptPath
         Task.detached {
-            guard let path = ClaudeSessionReader.jsonlPath(sessionId: effectiveId, cwd: cwd) else {
-                await MainActor.run { isLoading = false }
+            guard let path else {
+                await MainActor.run {
+                    stopWatchingTranscript()
+                    isLoading = false
+                    startTranscriptDiscovery()
+                }
                 return
             }
             let parsed = ClaudeSessionReader.readMessages(at: path)
             await MainActor.run {
-                messages = parsed
+                applyParsedMessages(parsed)
                 isLoading = false
+                stopTranscriptDiscovery()
+                startWatchingTranscript(at: path)
             }
-            await startAutoRefresh(path: path)
         }
     }
 
     @MainActor
-    private func startAutoRefresh(path: String) {
-        autoRefreshTask?.cancel()
-        autoRefreshTask = Task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(3))
-                guard !Task.isCancelled else { break }
-                let parsed = await Task.detached {
-                    ClaudeSessionReader.readMessages(at: path)
-                }.value
-                if parsed.count != messages.count {
-                    messages = parsed
-                }
+    private func startWatchingTranscript(at path: String, forceReopen: Bool = false) {
+        if !forceReopen, watchedTranscriptPath == path, fileWatchSource != nil {
+            return
+        }
+
+        stopWatchingTranscript()
+
+        let fd = open(path, O_EVTONLY)
+        guard fd >= 0 else {
+            watchedTranscriptPath = nil
+            return
+        }
+
+        watchedFileDescriptor = fd
+        watchedTranscriptPath = path
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .extend, .rename, .delete],
+            queue: .main
+        )
+
+        source.setEventHandler { [path] in
+            let flags = source.data
+            Task { @MainActor in
+                handleTranscriptEvent(flags, fallbackPath: path)
             }
         }
+
+        source.setCancelHandler {
+            close(fd)
+        }
+
+        fileWatchSource = source
+        source.resume()
+    }
+
+    @MainActor
+    private func stopWatchingTranscript() {
+        watcherReloadTask?.cancel()
+        watcherReloadTask = nil
+        stopTranscriptDiscovery()
+
+        fileWatchSource?.cancel()
+        fileWatchSource = nil
+
+        watchedFileDescriptor = -1
+        watchedTranscriptPath = nil
+    }
+
+    @MainActor
+    private func handleTranscriptEvent(_ flags: DispatchSource.FileSystemEvent, fallbackPath: String) {
+        let needsRewatch = flags.contains(.rename) || flags.contains(.delete)
+        scheduleTranscriptReload(rewatch: needsRewatch, fallbackPath: fallbackPath)
+    }
+
+    @MainActor
+    private func scheduleTranscriptReload(rewatch: Bool, fallbackPath: String) {
+        watcherReloadTask?.cancel()
+        watcherReloadTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+
+            let path = effectiveTranscriptPath ?? fallbackPath
+            if rewatch {
+                startWatchingTranscript(at: path, forceReopen: true)
+            }
+
+            let parsed = await Task.detached {
+                ClaudeSessionReader.readMessages(at: path)
+            }.value
+            applyParsedMessages(parsed)
+        }
+    }
+
+    @MainActor
+    private func startTranscriptDiscovery() {
+        guard transcriptDiscoveryTask == nil else { return }
+
+        transcriptDiscoveryTask = Task { @MainActor in
+            while !Task.isCancelled {
+                if let path = effectiveTranscriptPath {
+                    let parsed = await Task.detached {
+                        ClaudeSessionReader.readMessages(at: path)
+                    }.value
+                    applyParsedMessages(parsed)
+                    isLoading = false
+                    startWatchingTranscript(at: path)
+                    transcriptDiscoveryTask = nil
+                    return
+                }
+
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+    }
+
+    @MainActor
+    private func stopTranscriptDiscovery() {
+        transcriptDiscoveryTask?.cancel()
+        transcriptDiscoveryTask = nil
+    }
+
+    @MainActor
+    private func refreshTranscriptBindingIfNeeded() {
+        if let path = effectiveTranscriptPath {
+            stopTranscriptDiscovery()
+            if watchedTranscriptPath != path || fileWatchSource == nil {
+                let parsed = ClaudeSessionReader.readMessages(at: path)
+                applyParsedMessages(parsed)
+                isLoading = false
+                startWatchingTranscript(at: path, forceReopen: watchedTranscriptPath != path)
+            }
+        } else if fileWatchSource == nil {
+            startTranscriptDiscovery()
+        }
+    }
+
+    @MainActor
+    private func applyParsedMessages(_ parsed: [SessionChatMessage]) {
+        if parsed != messages {
+            messages = parsed
+        }
+        reconcilePendingMessages(with: parsed)
     }
 
     private func sendMessage() {
         let text = messageInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        let pendingMessage = SessionChatMessage(
+            id: "pending-user-\(UUID().uuidString)",
+            role: .user,
+            text: text,
+            timestamp: Date()
+        )
+        pendingUserMessages.append(pendingMessage)
         messageInput = ""
+        Task { @MainActor in
+            if watchedTranscriptPath == nil {
+                startTranscriptDiscovery()
+            }
+        }
         Task.detached {
             await MessageSender.send(text, to: session)
         }
+    }
+
+    private func reconcilePendingMessages(with parsed: [SessionChatMessage]) {
+        let parsedUsers = parsed.filter(\.isUser)
+        guard !parsedUsers.isEmpty, !pendingUserMessages.isEmpty else { return }
+
+        var searchIndex = 0
+        var unresolved: [SessionChatMessage] = []
+
+        for pending in pendingUserMessages {
+            let pendingText = normalizedUserText(pending.text)
+            var matched = false
+
+            while searchIndex < parsedUsers.count {
+                let candidate = parsedUsers[searchIndex]
+                searchIndex += 1
+
+                let sameText = normalizedUserText(candidate.text) == pendingText
+                let closeInTime = abs(candidate.timestamp.timeIntervalSince(pending.timestamp)) < 30
+                if sameText && closeInTime {
+                    matched = true
+                    break
+                }
+            }
+
+            if !matched {
+                unresolved.append(pending)
+            }
+        }
+
+        pendingUserMessages = unresolved
+    }
+
+    private func normalizedUserText(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Helpers
@@ -293,8 +495,8 @@ private struct ChatInputEditor: NSViewRepresentable {
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
-        textView.textContainerInset = NSSize(width: 4, height: 4)
-        textView.isVerticallyResizable = true
+        textView.textContainerInset = NSSize(width: 6, height: 4)
+        textView.isVerticallyResizable = false
         textView.string = text
 
         // Placeholder
@@ -364,7 +566,7 @@ private struct ChatInputEditor: NSViewRepresentable {
                 label.translatesAutoresizingMaskIntoConstraints = false
                 tv.addSubview(label)
                 NSLayoutConstraint.activate([
-                    label.leadingAnchor.constraint(equalTo: tv.leadingAnchor, constant: 9),
+                    label.leadingAnchor.constraint(equalTo: tv.leadingAnchor, constant: 12),
                     label.topAnchor.constraint(equalTo: tv.topAnchor, constant: 4),
                 ])
                 placeholderView = label

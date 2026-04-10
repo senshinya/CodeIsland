@@ -2,8 +2,8 @@ import Foundation
 import CodeIslandCore
 
 /// Parsed message from a Claude Code JSONL session file
-struct SessionChatMessage: Identifiable {
-    enum Role {
+struct SessionChatMessage: Identifiable, Equatable {
+    enum Role: Equatable {
         case user
         case assistant
         case tool(name: String)

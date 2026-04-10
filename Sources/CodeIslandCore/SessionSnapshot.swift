@@ -219,6 +219,7 @@ public struct SessionSnapshot {
         if let bid = termBundleId {
             let lower = bid.lowercased()
             if lower.contains("cmux") { return "cmux" }
+            if lower.contains("kaku") { return "Kaku" }
             if lower.contains("warp") { return "Warp" }
             if lower == "com.mitchellh.ghostty" { return "Ghostty" }
             if lower.contains("iterm2") { return "iTerm2" }
@@ -251,6 +252,7 @@ public struct SessionSnapshot {
         guard let app = termApp else { return nil }
         let lower = app.lowercased()
         if lower.contains("cmux") { return "cmux" }
+        if lower.contains("kaku") { return "Kaku" }
         if lower == "ghostty" { return "Ghostty" }
         if lower.contains("iterm") { return "iTerm2" }
         if lower.contains("warp") { return "Warp" }
