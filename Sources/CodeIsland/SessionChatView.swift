@@ -11,52 +11,41 @@ struct SessionChatView: View {
     @State private var messageInput = ""
     @State private var isLoading = true
     @State private var autoRefreshTask: Task<Void, Never>?
-    @FocusState private var isFocused: Bool
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
     @AppStorage(SettingsKey.maxPanelHeight) private var maxPanelHeight = SettingsDefaults.maxPanelHeight
 
     private var fontSize: CGFloat { CGFloat(contentFontSize) }
-    private let accentOrange = Color(red: 0.85, green: 0.47, blue: 0.34)
+    private let accent = Color(red: 0.85, green: 0.47, blue: 0.34)
 
     var body: some View {
         VStack(spacing: 0) {
             headerBar
 
-            // Separator
-            ChatLine()
-                .stroke(.white.opacity(0.12), style: StrokeStyle(lineWidth: 0.5, dash: [4, 3]))
+            Rectangle()
+                .fill(.white.opacity(0.06))
                 .frame(height: 0.5)
                 .padding(.horizontal, 10)
 
-            // Messages
             if isLoading {
-                HStack {
-                    Spacer()
-                    Text(L10n.shared["chat_loading"])
-                        .font(.system(size: fontSize, design: .monospaced))
-                        .foregroundStyle(accentOrange.opacity(0.6))
-                    Spacer()
-                }
-                .padding(.vertical, 20)
+                Spacer()
+                Text(L10n.shared["chat_loading"])
+                    .font(.system(size: fontSize, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.25))
+                Spacer()
             } else if messages.isEmpty {
-                HStack {
-                    Spacer()
-                    Text(L10n.shared["chat_empty"])
-                        .font(.system(size: fontSize, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.4))
-                    Spacer()
-                }
-                .padding(.vertical, 20)
+                Spacer()
+                Text(L10n.shared["chat_empty"])
+                    .font(.system(size: fontSize, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.2))
+                Spacer()
             } else {
                 messageList
             }
 
-            // Input bar (only for claude sessions with TTY)
             if session.isClaude, canSendMessage {
                 inputBar
             }
         }
-        .padding(.vertical, 6)
         .onAppear { loadMessages() }
         .onDisappear { autoRefreshTask?.cancel() }
     }
@@ -70,13 +59,13 @@ struct SessionChatView: View {
                     appState.surface = .sessionList
                 }
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 5) {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.7))
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.45))
                     Text(session.sessionLabel ?? session.projectDisplayName)
-                        .font(.system(size: fontSize + 1, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .font(.system(size: fontSize + 1, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.8))
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
@@ -94,28 +83,28 @@ struct SessionChatView: View {
                 if let model = session.shortModelName {
                     Text(model)
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(.white.opacity(0.35))
                 }
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 6)
+        .padding(.vertical, 8)
     }
 
     // MARK: - Message List
 
     private var messageList: some View {
         ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: true) {
-                VStack(alignment: .leading, spacing: 4) {
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
                     ForEach(messages) { msg in
                         messageRow(msg)
                     }
-                    // Invisible anchor at bottom
                     Color.clear.frame(height: 1).id("chat_bottom")
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
+                .padding(.horizontal, 14)
+                .padding(.top, 10)
+                .padding(.bottom, 6)
             }
             .frame(maxHeight: chatMaxHeight)
             .onAppear {
@@ -134,58 +123,71 @@ struct SessionChatView: View {
         return h - 80
     }
 
+    // MARK: - Message Rows
+
     @ViewBuilder
     private func messageRow(_ msg: SessionChatMessage) -> some View {
         switch msg.role {
         case .user:
-            HStack {
-                Spacer(minLength: 40)
-                Text(msg.text)
-                    .font(.system(size: fontSize, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.95))
-                    .lineLimit(nil)
-                    .multilineTextAlignment(.trailing)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(Color.white.opacity(0.12))
-                    )
-            }
-            .padding(.vertical, 2)
-
+            userRow(msg.text)
         case .assistant:
-            HStack(alignment: .top, spacing: 6) {
-                ClaudeMiniIcon(size: 14)
-                    .padding(.top, 3)
-                Text(renderMarkdown(chatStripDirectives(msg.text)))
-                    .font(.system(size: fontSize, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .lineLimit(nil)
-                    .textSelection(.enabled)
-                Spacer(minLength: 20)
-            }
-            .padding(.vertical, 2)
-
-        case .tool(let name):
-            HStack(spacing: 4) {
-                Image(systemName: toolIcon(name))
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(accentOrange.opacity(0.7))
-                Text(msg.text)
-                    .font(.system(size: fontSize - 1, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.45))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color.white.opacity(0.04))
-            )
-            .padding(.leading, 20)
+            assistantRow(msg.text)
+        case .tool:
+            toolRow(msg.text)
         }
+    }
+
+    /// User message — right-aligned dark bubble
+    private func userRow(_ text: String) -> some View {
+        HStack {
+            Spacer(minLength: 50)
+            Text(text)
+                .font(.system(size: fontSize, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.9))
+                .multilineTextAlignment(.trailing)
+                .lineLimit(nil)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(.white.opacity(0.10))
+                )
+        }
+        .padding(.top, 10)
+        .padding(.bottom, 4)
+    }
+
+    /// Assistant message — left-aligned with ◇ marker
+    private func assistantRow(_ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("◇")
+                .font(.system(size: fontSize, weight: .medium, design: .monospaced))
+                .foregroundStyle(accent.opacity(0.65))
+            Text(renderMarkdown(chatStripDirectives(text)))
+                .font(.system(size: fontSize, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.85))
+                .lineLimit(nil)
+                .textSelection(.enabled)
+            Spacer(minLength: 16)
+        }
+        .padding(.top, 10)
+        .padding(.bottom, 2)
+    }
+
+    /// Tool call — compact muted row
+    private func toolRow(_ text: String) -> some View {
+        HStack(spacing: 5) {
+            Text("▸")
+                .font(.system(size: fontSize - 2, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.2))
+            Text(text)
+                .font(.system(size: fontSize - 1.5, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.3))
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .padding(.leading, 20)
+        .padding(.vertical, 1)
     }
 
     // MARK: - Input Bar
@@ -195,31 +197,21 @@ struct SessionChatView: View {
     }
 
     private var inputBar: some View {
-        HStack(spacing: 8) {
-            TextField(L10n.shared["chat_placeholder"], text: $messageInput)
-                .textFieldStyle(.plain)
-                .font(.system(size: fontSize, design: .monospaced))
-                .foregroundStyle(.white)
-                .focused($isFocused)
-                .onSubmit { sendMessage() }
-
-            Button(action: sendMessage) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 20))
-                    .foregroundStyle(messageInput.isEmpty ? .white.opacity(0.2) : accentOrange)
-            }
-            .buttonStyle(.plain)
-            .disabled(messageInput.isEmpty)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.white.opacity(0.05))
-        .overlay(
+        VStack(spacing: 0) {
             Rectangle()
-                .fill(.white.opacity(0.1))
-                .frame(height: 0.5),
-            alignment: .top
-        )
+                .fill(.white.opacity(0.06))
+                .frame(height: 0.5)
+
+            ChatInputEditor(
+                text: $messageInput,
+                font: .monospacedSystemFont(ofSize: fontSize, weight: .regular),
+                placeholderText: L10n.shared["chat_placeholder"],
+                onSubmit: sendMessage
+            )
+            .frame(minHeight: 28, maxHeight: 80)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+        }
     }
 
     // MARK: - Actions
@@ -273,17 +265,111 @@ struct SessionChatView: View {
     private func renderMarkdown(_ text: String) -> AttributedString {
         ChatMessageTextFormatter.inlineMarkdown(text)
     }
+}
 
-    private func toolIcon(_ name: String) -> String {
-        switch name {
-        case "Bash": return "terminal"
-        case "Read": return "doc.text"
-        case "Edit", "Write": return "pencil"
-        case "Grep": return "magnifyingglass"
-        case "Glob": return "folder"
-        case "Agent": return "person.2"
-        case "WebSearch", "WebFetch": return "globe"
-        default: return "wrench"
+// MARK: - Chat Input Editor (NSTextView wrapper)
+
+/// Multi-line text input: Enter sends, Shift+Enter inserts newline.
+private struct ChatInputEditor: NSViewRepresentable {
+    @Binding var text: String
+    var font: NSFont
+    var placeholderText: String
+    var onSubmit: () -> Void
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSTextView.scrollableTextView()
+        scrollView.hasVerticalScroller = false
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+
+        let textView = scrollView.documentView as! NSTextView
+        textView.delegate = context.coordinator
+        textView.font = font
+        textView.textColor = .white
+        textView.backgroundColor = .clear
+        textView.drawsBackground = false
+        textView.insertionPointColor = .white.withAlphaComponent(0.7)
+        textView.isRichText = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.textContainerInset = NSSize(width: 4, height: 4)
+        textView.isVerticallyResizable = true
+        textView.string = text
+
+        // Placeholder
+        let placeholder = NSAttributedString(
+            string: placeholderText,
+            attributes: [
+                .foregroundColor: NSColor.white.withAlphaComponent(0.2),
+                .font: font,
+            ]
+        )
+        context.coordinator.placeholderAttr = placeholder
+        context.coordinator.textView = textView
+        context.coordinator.updatePlaceholder()
+
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        let textView = scrollView.documentView as! NSTextView
+        if textView.string != text {
+            textView.string = text
+            context.coordinator.updatePlaceholder()
+        }
+        context.coordinator.onSubmit = onSubmit
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: ChatInputEditor
+        var onSubmit: (() -> Void)?
+        var placeholderAttr: NSAttributedString?
+        weak var textView: NSTextView?
+        private var placeholderView: NSTextField?
+
+        init(_ parent: ChatInputEditor) {
+            self.parent = parent
+            self.onSubmit = parent.onSubmit
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let tv = notification.object as? NSTextView else { return }
+            parent.text = tv.string
+            updatePlaceholder()
+        }
+
+        func textView(_ textView: NSTextView, doCommandBy sel: Selector) -> Bool {
+            if sel == #selector(NSResponder.insertNewline(_:)) {
+                if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+                    textView.insertNewlineIgnoringFieldEditor(nil)
+                    return true
+                }
+                onSubmit?()
+                return true
+            }
+            return false
+        }
+
+        func updatePlaceholder() {
+            guard let tv = textView else { return }
+            if placeholderView == nil {
+                let label = NSTextField(labelWithString: "")
+                label.isEditable = false
+                label.isBordered = false
+                label.drawsBackground = false
+                label.attributedStringValue = placeholderAttr ?? NSAttributedString()
+                label.translatesAutoresizingMaskIntoConstraints = false
+                tv.addSubview(label)
+                NSLayoutConstraint.activate([
+                    label.leadingAnchor.constraint(equalTo: tv.leadingAnchor, constant: 9),
+                    label.topAnchor.constraint(equalTo: tv.topAnchor, constant: 4),
+                ])
+                placeholderView = label
+            }
+            placeholderView?.isHidden = !tv.string.isEmpty
         }
     }
 }
@@ -297,7 +383,6 @@ enum MessageSender {
             return
         }
 
-        // Resolve real TTY: hook may report "/dev/tty" (generic), look up via PID
         let tty = resolveRealTTY(session: session)
         if let tty, !tty.isEmpty {
             sendViaTTY(text, tty: tty)
@@ -305,11 +390,9 @@ enum MessageSender {
     }
 
     private static func resolveRealTTY(session: SessionSnapshot) -> String? {
-        // If ttyPath is a real device (not /dev/tty), use it directly
         if let tty = session.ttyPath, !tty.isEmpty, tty != "/dev/tty" {
             return tty
         }
-        // Look up real TTY from CLI process PID
         guard let pid = session.cliPid, pid > 0 else { return session.ttyPath }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/ps")
@@ -322,7 +405,6 @@ enum MessageSender {
         let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if output.isEmpty { return session.ttyPath }
-        // ps returns e.g. "ttys000" — prepend /dev/
         let devPath = output.hasPrefix("/dev/") ? output : "/dev/\(output)"
         return devPath
     }
@@ -342,7 +424,6 @@ enum MessageSender {
     private static func sendViaTTY(_ text: String, tty: String) {
         guard let handle = FileHandle(forWritingAtPath: tty) else { return }
         defer { handle.closeFile() }
-        // Terminal Enter key is \r (carriage return), not \n (line feed)
         if let data = (text + "\r").data(using: .utf8) {
             handle.write(data)
         }
@@ -365,33 +446,6 @@ enum MessageSender {
         try process.run()
         process.waitUntilExit()
         return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-    }
-}
-
-// MARK: - Private Views
-
-private struct ClaudeMiniIcon: View {
-    var size: CGFloat = 14
-    private static let color = Color(red: 0.85, green: 0.47, blue: 0.34)
-
-    var body: some View {
-        Circle()
-            .fill(Self.color.opacity(0.2))
-            .frame(width: size, height: size)
-            .overlay(
-                Text("C")
-                    .font(.system(size: size * 0.55, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Self.color)
-            )
-    }
-}
-
-private struct ChatLine: Shape {
-    func path(in rect: CGRect) -> Path {
-        var p = Path()
-        p.move(to: CGPoint(x: rect.minX, y: rect.midY))
-        p.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
-        return p
     }
 }
 
