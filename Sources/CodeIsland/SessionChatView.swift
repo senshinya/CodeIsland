@@ -17,6 +17,7 @@ struct SessionChatView: View {
     @State private var watchedTranscriptPath: String?
     @State private var watcherReloadTask: Task<Void, Never>?
     @State private var transcriptDiscoveryTask: Task<Void, Never>?
+    @State private var scrollToBottomTask: Task<Void, Never>?
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
     @AppStorage(SettingsKey.maxPanelHeight) private var maxPanelHeight = SettingsDefaults.maxPanelHeight
 
@@ -145,12 +146,23 @@ struct SessionChatView: View {
             .textSelection(.disabled)
             .frame(maxHeight: chatMaxHeight)
             .onAppear {
-                proxy.scrollTo("chat_bottom", anchor: .bottom)
+                scrollToBottom(with: proxy)
             }
             .onChange(of: visibleMessages) { _, _ in
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo("chat_bottom", anchor: .bottom)
-                }
+                scrollToBottom(with: proxy)
+            }
+        }
+    }
+
+    private func scrollToBottom(with proxy: ScrollViewProxy) {
+        scrollToBottomTask?.cancel()
+        scrollToBottomTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(75))
+            guard !Task.isCancelled else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo("chat_bottom", anchor: .bottom)
             }
         }
     }
