@@ -25,6 +25,9 @@ final class UsageTracker: ObservableObject {
     private var refreshTimer: Timer?
     private let cacheDuration: TimeInterval = 180  // 3 minutes
 
+    /// Cached OAuth token so we don't hit the Keychain on every poll.
+    private var cachedToken: String?
+
     private init() {}
 
     func startPolling() {
@@ -39,6 +42,7 @@ final class UsageTracker: ObservableObject {
         refreshTimer?.invalidate()
         refreshTimer = nil
         fetchTask?.cancel()
+        cachedToken = nil
     }
 
     func fetch() {
@@ -47,7 +51,13 @@ final class UsageTracker: ObservableObject {
 
         fetchTask?.cancel()
         fetchTask = Task {
-            guard let token = Self.readOAuthToken() else {
+            // Use cached token to avoid repeated Keychain prompts.
+            // Only read from Keychain/file when we have no cached token
+            // or when the cached one stops working (401).
+            if cachedToken == nil {
+                cachedToken = Self.readOAuthToken()
+            }
+            guard let token = cachedToken else {
                 Self.log.debug("No OAuth token found")
                 isAvailable = false
                 return
@@ -58,6 +68,11 @@ final class UsageTracker: ObservableObject {
                     self.data = usage
                     self.isAvailable = true
                 }
+            } catch let error as URLError where error.code == .userAuthenticationRequired {
+                // Token may have expired — clear cache so next poll re-reads
+                Self.log.debug("Token rejected, clearing cache")
+                cachedToken = nil
+                isAvailable = false
             } catch {
                 Self.log.error("Usage fetch failed: \(error.localizedDescription)")
             }
@@ -74,7 +89,7 @@ final class UsageTracker: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-            throw URLError(.badServerResponse)
+            throw URLError(http.statusCode == 401 ? .userAuthenticationRequired : .badServerResponse)
         }
 
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -106,10 +121,10 @@ final class UsageTracker: ObservableObject {
     // MARK: - Token
 
     private static func readOAuthToken() -> String? {
-        // Try macOS Keychain first
-        if let token = readFromKeychain() { return token }
-        // Fallback: ~/.claude/.credentials.json
-        return readFromCredentialsFile()
+        // Prefer credentials file — no Keychain prompt needed.
+        if let token = readFromCredentialsFile() { return token }
+        // Fallback to Keychain (may prompt once).
+        return readFromKeychain()
     }
 
     private static func readFromKeychain() -> String? {
