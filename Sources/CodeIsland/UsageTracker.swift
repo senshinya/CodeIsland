@@ -31,6 +31,7 @@ final class UsageTracker: ObservableObject {
     private init() {}
 
     func startPolling() {
+        Self.log.info("startPolling showUsageInfo path active")
         fetch()
         refreshTimer?.invalidate()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: cacheDuration, repeats: true) { [weak self] _ in
@@ -39,6 +40,7 @@ final class UsageTracker: ObservableObject {
     }
 
     func stopPolling() {
+        Self.log.info("stopPolling")
         refreshTimer?.invalidate()
         refreshTimer = nil
         fetchTask?.cancel()
@@ -47,7 +49,10 @@ final class UsageTracker: ObservableObject {
 
     func fetch() {
         // Skip if recently fetched
-        if Date().timeIntervalSince(data.fetchedAt) < 30 { return }
+        if Date().timeIntervalSince(data.fetchedAt) < 30 {
+            Self.log.info("fetch skipped due to cache window")
+            return
+        }
 
         fetchTask?.cancel()
         fetchTask = Task {
@@ -67,14 +72,15 @@ final class UsageTracker: ObservableObject {
                 if !Task.isCancelled {
                     self.data = usage
                     self.isAvailable = true
+                    Self.log.info("Usage fetch succeeded fiveHour=\(usage.fiveHour.utilization, privacy: .public) sevenDay=\(usage.sevenDay.utilization, privacy: .public)")
                 }
             } catch let error as URLError where error.code == .userAuthenticationRequired {
                 // Token may have expired — clear cache so next poll re-reads
-                Self.log.debug("Token rejected, clearing cache")
+                Self.log.info("Token rejected, clearing cache")
                 cachedToken = nil
                 isAvailable = false
             } catch {
-                Self.log.error("Usage fetch failed: \(error.localizedDescription)")
+                Self.log.error("Usage fetch failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }

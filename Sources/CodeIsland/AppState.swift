@@ -16,6 +16,7 @@ struct ProcessIdentity: Equatable {
 final class AppState {
     var sessions: [String: SessionSnapshot] = [:]
     var activeSessionId: String?
+    var isPanelHovered = false
     var permissionQueue: [PermissionRequest] = []
     var questionQueue: [QuestionRequest] = []
     /// Sessions with all future permissions auto-approved (bypass mode)
@@ -50,6 +51,14 @@ final class AppState {
     private var isShowingCompletion: Bool {
         if case .completionCard = surface { return true }
         return false
+    }
+    private var isInteractiveSurfaceLocked: Bool {
+        switch surface {
+        case .approvalCard, .questionCard, .chatHistory:
+            return true
+        default:
+            return false
+        }
     }
     private var modelReadRetryAt: [String: Date] = [:]
 
@@ -532,7 +541,7 @@ final class AppState {
         // Don't queue duplicates
         if completionQueue.contains(sessionId) || justCompletedSessionId == sessionId { return }
 
-        if isShowingCompletion {
+        if isShowingCompletion || isInteractiveSurfaceLocked {
             // Already showing one — queue this for later
             completionQueue.append(sessionId)
         } else {
@@ -550,6 +559,13 @@ final class AppState {
     }
 
     private func showCompletion(_ sessionId: String) {
+        guard !isInteractiveSurfaceLocked else {
+            if !completionQueue.contains(sessionId) {
+                completionQueue.append(sessionId)
+            }
+            return
+        }
+
         // Fast path: terminal not even frontmost — show immediately
         guard shouldSuppressAppLevel(for: sessionId) else {
             doShowCompletion(sessionId)
@@ -669,6 +685,49 @@ final class AppState {
             sessions[trackedSessionId]?.sessionTitle = nil
             sessions[trackedSessionId]?.sessionTitleSource = nil
         }
+    }
+
+    private static func shouldAcceptDiscoveredClaudeTranscript(
+        modifiedAt: Date,
+        for session: SessionSnapshot
+    ) -> Bool {
+        guard session.source == "claude" else { return true }
+
+        let hasVisibleHistory =
+            !session.recentMessages.isEmpty
+            || !(session.lastUserPrompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            || !(session.lastAssistantMessage?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        guard !hasVisibleHistory else { return true }
+
+        guard let start = session.cliStartTime else { return true }
+        return modifiedAt >= start.addingTimeInterval(-1)
+    }
+
+    private static func sanitizedProviderSessionId(
+        _ providerSessionId: String?,
+        trackedSessionId: String,
+        session: SessionSnapshot
+    ) -> String? {
+        guard let providerSessionId = providerSessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !providerSessionId.isEmpty else { return nil }
+
+        guard session.source == "claude" else { return providerSessionId }
+
+        let hasVisibleHistory =
+            !session.recentMessages.isEmpty
+            || !(session.lastUserPrompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            || !(session.lastAssistantMessage?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        guard !hasVisibleHistory else { return providerSessionId }
+
+        guard providerSessionId != trackedSessionId else { return providerSessionId }
+        guard let start = session.cliStartTime else { return providerSessionId }
+        guard let path = ClaudeSessionReader.jsonlPath(sessionId: providerSessionId, cwd: session.cwd),
+              let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let modified = attrs[.modificationDate] as? Date else {
+            return nil
+        }
+
+        return modified >= start.addingTimeInterval(-1) ? providerSessionId : nil
     }
 
     func handleEvent(_ event: HookEvent) {
@@ -1400,7 +1459,6 @@ final class AppState {
             snapshot.model = p.model
             snapshot.sessionTitle = p.sessionTitle
             snapshot.sessionTitleSource = p.sessionTitleSource
-            snapshot.providerSessionId = p.providerSessionId
             snapshot.lastUserPrompt = p.lastUserPrompt
             snapshot.lastAssistantMessage = p.lastAssistantMessage
             if let prompt = p.lastUserPrompt {
@@ -1423,6 +1481,11 @@ final class AppState {
                 snapshot.cliPid = pid
                 snapshot.cliStartTime = p.cliStartTime
             }
+            snapshot.providerSessionId = Self.sanitizedProviderSessionId(
+                p.providerSessionId,
+                trackedSessionId: p.sessionId,
+                session: snapshot
+            )
             sessions[p.sessionId] = snapshot
             refreshProviderTitle(for: p.sessionId)
             // Reattach exit monitoring without changing the restored idle/running snapshot.
@@ -1628,7 +1691,25 @@ final class AppState {
                     }
                 }
                 tryMonitorSession(existingKey)
-                refreshProviderTitle(for: existingKey, providerSessionId: info.sessionId)
+                if let existing = sessions[existingKey] {
+                    if Self.shouldAcceptDiscoveredClaudeTranscript(modifiedAt: info.modifiedAt, for: existing) {
+                        refreshProviderTitle(for: existingKey, providerSessionId: info.sessionId)
+                    } else {
+                        let sanitizedProviderId = Self.sanitizedProviderSessionId(
+                            existing.providerSessionId,
+                            trackedSessionId: existingKey,
+                            session: existing
+                        )
+                        if sanitizedProviderId != existing.providerSessionId {
+                            sessions[existingKey]?.providerSessionId = sanitizedProviderId
+                            if sanitizedProviderId == nil {
+                                sessions[existingKey]?.sessionTitle = nil
+                                sessions[existingKey]?.sessionTitleSource = nil
+                            }
+                            didMutate = true
+                        }
+                    }
+                }
                 continue
             }
 
@@ -1744,7 +1825,7 @@ final class AppState {
                    let modified = attrs[.modificationDate] as? Date,
                    modified > bestDate {
                     // Skip files from old sessions: must be modified after process started
-                    if let start = processStart, modified < start.addingTimeInterval(-10) {
+                    if let start = processStart, modified < start.addingTimeInterval(-1) {
                         continue
                     }
                     bestDate = modified

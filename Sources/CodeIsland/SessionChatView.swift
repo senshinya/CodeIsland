@@ -2,8 +2,7 @@ import SwiftUI
 import CodeIslandCore
 import Darwin
 
-/// Chat history view for a Claude Code session — shows messages from the JSONL transcript
-/// and allows sending new messages via the session's terminal.
+/// Chat history view for a supported CLI session.
 struct SessionChatView: View {
     let sessionId: String
     let session: SessionSnapshot
@@ -12,6 +11,7 @@ struct SessionChatView: View {
     @State private var pendingUserMessages: [SessionChatMessage] = []
     @State private var messageInput = ""
     @State private var isLoading = true
+    @State private var inputFocusRequest = 0
     @State private var fileWatchSource: DispatchSourceFileSystemObject?
     @State private var watchedFileDescriptor: Int32 = -1
     @State private var watchedTranscriptPath: String?
@@ -24,15 +24,17 @@ struct SessionChatView: View {
     private let accent = Color(red: 0.85, green: 0.47, blue: 0.34)
     private let toolGreen = Color(red: 0.40, green: 0.88, blue: 0.62)
     private var displayedMessages: [SessionChatMessage] { messages + pendingUserMessages }
+    private var visibleMessages: [SessionChatMessage] {
+        let limit = session.source == "codex" ? 240 : 400
+        if displayedMessages.count > limit {
+            return Array(displayedMessages.suffix(limit))
+        }
+        return displayedMessages
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             headerBar
-
-            Rectangle()
-                .fill(.white.opacity(0.06))
-                .frame(height: 0.5)
-                .padding(.horizontal, 10)
 
             if isLoading {
                 Spacer()
@@ -50,7 +52,7 @@ struct SessionChatView: View {
                 messageList
             }
 
-            if session.isClaude, canSendMessage {
+            if canShowInputBar {
                 inputBar
             }
         }
@@ -67,42 +69,57 @@ struct SessionChatView: View {
     // MARK: - Header
 
     private var headerBar: some View {
-        HStack(spacing: 8) {
-            Button {
-                withAnimation(NotchAnimation.open) {
-                    appState.surface = .sessionList
-                }
-            } label: {
+        ZStack {
+            HStack(spacing: 8) {
                 HStack(spacing: 5) {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(.white.opacity(0.45))
                     Text(session.sessionLabel ?? session.projectDisplayName)
-                        .font(.system(size: fontSize + 1, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.8))
+                        .font(.system(size: fontSize + 2, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.84))
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
-            }
-            .buttonStyle(.plain)
+                .padding(.vertical, 3)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer()
-
-            HStack(spacing: 4) {
-                if let icon = cliIcon(source: session.source, size: 12) {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .frame(width: 12, height: 12)
-                }
-                if let model = session.shortModelName {
-                    Text(model)
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.35))
+                HStack(spacing: 4) {
+                    if let icon = cliIcon(source: session.source, size: 13) {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .frame(width: 13, height: 13)
+                    }
+                    if let model = session.shortModelName {
+                        Text(model)
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.42))
+                    }
                 }
             }
+            .allowsHitTesting(false)
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
+        .background(
+            LinearGradient(
+                colors: [
+                    .white.opacity(0.02),
+                    .white.opacity(0.008),
+                    .clear
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(.white.opacity(0.055))
+                    .frame(height: 0.5)
+                    .padding(.horizontal, 10)
+            }
+        )
+        .zIndex(2)
     }
 
     // MARK: - Message List
@@ -110,8 +127,8 @@ struct SessionChatView: View {
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(displayedMessages) { msg in
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    ForEach(visibleMessages) { msg in
                         messageRow(msg)
                     }
                     Color.clear.frame(height: 1).id("chat_bottom")
@@ -120,11 +137,12 @@ struct SessionChatView: View {
                 .padding(.top, 14)
                 .padding(.bottom, 10)
             }
+            .textSelection(.disabled)
             .frame(maxHeight: chatMaxHeight)
             .onAppear {
                 proxy.scrollTo("chat_bottom", anchor: .bottom)
             }
-            .onChange(of: displayedMessages) { _, _ in
+            .onChange(of: visibleMessages) { _, _ in
                 withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo("chat_bottom", anchor: .bottom)
                 }
@@ -188,7 +206,6 @@ struct SessionChatView: View {
                 .foregroundStyle(.white.opacity(0.9))
                 .lineLimit(nil)
                 .lineSpacing(4)
-                .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 16)
         }
@@ -225,7 +242,18 @@ struct SessionChatView: View {
     // MARK: - Input Bar
 
     private var canSendMessage: Bool {
-        session.ttyPath != nil || session.tmuxPane != nil || (session.cliPid ?? 0) > 0
+        guard let pane = session.tmuxPane?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+        return !pane.isEmpty
+    }
+
+    private var canShowInputBar: Bool {
+        session.isClaude && canSendMessage
+    }
+
+    private var hasVisibleSessionHistory: Bool {
+        !session.recentMessages.isEmpty
+            || !(session.lastUserPrompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            || !(session.lastAssistantMessage?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
     }
 
     private var inputBar: some View {
@@ -233,6 +261,7 @@ struct SessionChatView: View {
             text: $messageInput,
             font: .monospacedSystemFont(ofSize: fontSize + 1, weight: .regular),
             placeholderText: L10n.shared["chat_placeholder"],
+            focusRequest: inputFocusRequest,
             onSubmit: sendMessage
         )
         .frame(height: 24)
@@ -249,27 +278,67 @@ struct SessionChatView: View {
         .padding(.horizontal, 18)
         .padding(.top, 10)
         .padding(.bottom, 14)
+        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .onTapGesture {
+            inputFocusRequest += 1
+        }
+        .onHover { _ in }
     }
 
     // MARK: - Actions
 
     private var effectiveTranscriptPath: String? {
-        ClaudeSessionReader.jsonlPath(sessionId: session.providerSessionId ?? sessionId, cwd: session.cwd)
+        switch session.source {
+        case "claude":
+            return ClaudeSessionReader.jsonlPath(sessionId: preferredTranscriptSessionId, cwd: session.cwd)
+        case "codex":
+            return CodexSessionReader.transcriptPath(
+                sessionId: preferredTranscriptSessionId,
+                cwd: session.cwd,
+                processStart: session.cliStartTime
+            )
+        default:
+            return nil
+        }
+    }
+
+    private var preferredTranscriptSessionId: String {
+        guard let providerSessionId = session.providerSessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !providerSessionId.isEmpty else {
+            return sessionId
+        }
+
+        guard session.isClaude, providerSessionId != sessionId, !hasVisibleSessionHistory else {
+            return providerSessionId
+        }
+
+        guard let path = ClaudeSessionReader.jsonlPath(sessionId: providerSessionId, cwd: session.cwd),
+              let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let modified = attrs[.modificationDate] as? Date,
+              let start = session.cliStartTime,
+              modified >= start.addingTimeInterval(-1) else {
+            return sessionId
+        }
+
+        return providerSessionId
     }
 
     private func loadMessages() {
         isLoading = true
         let path = effectiveTranscriptPath
+        let source = session.source
         Task.detached {
             guard let path else {
                 await MainActor.run {
+                    messages = []
+                    pendingUserMessages = []
                     stopWatchingTranscript()
                     isLoading = false
                     startTranscriptDiscovery()
                 }
                 return
             }
-            let parsed = ClaudeSessionReader.readMessages(at: path)
+            let parsed = Self.readMessages(source: source, at: path)
             await MainActor.run {
                 applyParsedMessages(parsed)
                 isLoading = false
@@ -348,8 +417,9 @@ struct SessionChatView: View {
                 startWatchingTranscript(at: path, forceReopen: true)
             }
 
+            let source = session.source
             let parsed = await Task.detached {
-                ClaudeSessionReader.readMessages(at: path)
+                Self.readMessages(source: source, at: path)
             }.value
             applyParsedMessages(parsed)
         }
@@ -362,8 +432,9 @@ struct SessionChatView: View {
         transcriptDiscoveryTask = Task { @MainActor in
             while !Task.isCancelled {
                 if let path = effectiveTranscriptPath {
+                    let source = session.source
                     let parsed = await Task.detached {
-                        ClaudeSessionReader.readMessages(at: path)
+                        Self.readMessages(source: source, at: path)
                     }.value
                     applyParsedMessages(parsed)
                     isLoading = false
@@ -388,7 +459,7 @@ struct SessionChatView: View {
         if let path = effectiveTranscriptPath {
             stopTranscriptDiscovery()
             if watchedTranscriptPath != path || fileWatchSource == nil {
-                let parsed = ClaudeSessionReader.readMessages(at: path)
+                let parsed = Self.readMessages(source: session.source, at: path)
                 applyParsedMessages(parsed)
                 isLoading = false
                 startWatchingTranscript(at: path, forceReopen: watchedTranscriptPath != path)
@@ -464,6 +535,17 @@ struct SessionChatView: View {
 
     // MARK: - Helpers
 
+    nonisolated private static func readMessages(source: String, at path: String) -> [SessionChatMessage] {
+        switch source {
+        case "claude":
+            return ClaudeSessionReader.readMessages(at: path)
+        case "codex":
+            return CodexSessionReader.readMessages(at: path)
+        default:
+            return []
+        }
+    }
+
     private func renderMarkdown(_ text: String) -> AttributedString {
         ChatMessageTextFormatter.inlineMarkdown(text)
     }
@@ -476,15 +558,19 @@ private struct ChatInputEditor: NSViewRepresentable {
     @Binding var text: String
     var font: NSFont
     var placeholderText: String
+    var focusRequest: Int
     var onSubmit: () -> Void
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSTextView.scrollableTextView()
+        let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = false
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
+        scrollView.autohidesScrollers = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.contentView.drawsBackground = false
 
-        let textView = scrollView.documentView as! NSTextView
+        let textView = ChatInputTextView(frame: .zero)
         textView.delegate = context.coordinator
         textView.font = font
         textView.textColor = .white
@@ -492,12 +578,22 @@ private struct ChatInputEditor: NSViewRepresentable {
         textView.drawsBackground = false
         textView.insertionPointColor = .white.withAlphaComponent(0.7)
         textView.isRichText = false
+        textView.isEditable = true
+        textView.isSelectable = true
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
-        textView.textContainerInset = NSSize(width: 6, height: 4)
+        textView.textContainerInset = NSSize(width: 2, height: 4)
         textView.isVerticallyResizable = false
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         textView.string = text
+        textView.frame = NSRect(origin: .zero, size: scrollView.contentSize)
+        scrollView.documentView = textView
 
         // Placeholder
         let placeholder = NSAttributedString(
@@ -515,12 +611,24 @@ private struct ChatInputEditor: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        let textView = scrollView.documentView as! NSTextView
+        let textView = scrollView.documentView as! ChatInputTextView
+        if textView.frame.size != scrollView.contentSize {
+            textView.frame = NSRect(origin: .zero, size: scrollView.contentSize)
+        }
         if textView.string != text {
             textView.string = text
             context.coordinator.updatePlaceholder()
         }
         context.coordinator.onSubmit = onSubmit
+        if context.coordinator.lastFocusRequest != focusRequest {
+            context.coordinator.lastFocusRequest = focusRequest
+            DispatchQueue.main.async {
+                guard textView.window != nil else { return }
+                textView.suppressAutomaticFocus = false
+                textView.window?.makeFirstResponder(textView)
+                textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
+            }
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -531,10 +639,12 @@ private struct ChatInputEditor: NSViewRepresentable {
         var placeholderAttr: NSAttributedString?
         weak var textView: NSTextView?
         private var placeholderView: NSTextField?
+        var lastFocusRequest: Int
 
         init(_ parent: ChatInputEditor) {
             self.parent = parent
             self.onSubmit = parent.onSubmit
+            self.lastFocusRequest = parent.focusRequest
         }
 
         func textDidChange(_ notification: Notification) {
@@ -566,13 +676,30 @@ private struct ChatInputEditor: NSViewRepresentable {
                 label.translatesAutoresizingMaskIntoConstraints = false
                 tv.addSubview(label)
                 NSLayoutConstraint.activate([
-                    label.leadingAnchor.constraint(equalTo: tv.leadingAnchor, constant: 12),
+                    label.leadingAnchor.constraint(equalTo: tv.leadingAnchor, constant: 8),
                     label.topAnchor.constraint(equalTo: tv.topAnchor, constant: 4),
                 ])
                 placeholderView = label
             }
             placeholderView?.isHidden = !tv.string.isEmpty
         }
+    }
+}
+
+private final class ChatInputTextView: NSTextView {
+    var suppressAutomaticFocus = true
+
+    override var acceptsFirstResponder: Bool {
+        if suppressAutomaticFocus {
+            return false
+        }
+        return super.acceptsFirstResponder
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        suppressAutomaticFocus = false
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
     }
 }
 

@@ -3,6 +3,7 @@ import SwiftUI
 import os.log
 
 private let log = Logger(subsystem: "com.codeisland", category: "Panel")
+private let hostingLog = Logger(subsystem: "com.codeisland", category: "NotchHostingView")
 
 private class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
@@ -18,11 +19,23 @@ private class NotchHostingView<Content: View>: NSHostingView<Content> {
     private var applyingDeferred = false
 
     override func mouseDown(with event: NSEvent) {
+        let localPoint = convert(event.locationInWindow, from: nil)
+        let hitView = super.hitTest(localPoint)
+        let hitName = hitView.map { String(describing: type(of: $0)) } ?? "nil"
+        hostingLog.info("mouseDown location=(\(event.locationInWindow.x, privacy: .public), \(event.locationInWindow.y, privacy: .public)) local=(\(localPoint.x, privacy: .public), \(localPoint.y, privacy: .public)) windowIsKey=\(self.window?.isKeyWindow == true, privacy: .public) hit=\(hitName, privacy: .public)")
         window?.makeKey()
         super.mouseDown(with: event)
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// Borderless transparent panels can otherwise return nil for empty SwiftUI regions,
+    /// which lets hover/click tracking fall through to apps beneath the panel.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        if hit != nil { return hit }
+        return bounds.contains(point) ? self : nil
+    }
 
     /// Always defer `needsUpdateConstraints = true` to the next run-loop turn.
     /// During AppKit's display-cycle (constraint-update or layout phases),
@@ -65,6 +78,96 @@ private class NotchHostingView<Content: View>: NSHostingView<Content> {
         applyingDeferred = true
         super.needsLayout = value
         applyingDeferred = false
+    }
+}
+
+private final class HoverBlockingContainerView<Content: View>: NSView {
+    let hostingView: NotchHostingView<Content>
+    let appState: AppState
+    private var blockingTrackingArea: NSTrackingArea?
+
+    init(hostingView: NotchHostingView<Content>, appState: AppState) {
+        self.hostingView = hostingView
+        self.appState = appState
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = true
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(hostingView)
+        NSLayoutConstraint.activate([
+            hostingView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            hostingView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            hostingView.topAnchor.constraint(equalTo: topAnchor),
+            hostingView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override var isFlipped: Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let converted = convert(point, to: hostingView)
+        if let hit = hostingView.hitTest(converted) {
+            return hit
+        }
+        return bounds.contains(point) ? self : nil
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let blockingTrackingArea {
+            removeTrackingArea(blockingTrackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.activeAlways, .mouseEnteredAndExited, .mouseMoved, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        blockingTrackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        appState.isPanelHovered = true
+        window?.makeKey()
+        NSApp.activate(ignoringOtherApps: false)
+        super.mouseEntered(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        appState.isPanelHovered = false
+        super.mouseExited(with: event)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if shouldInterceptChatBack(at: event.locationInWindow) {
+            hostingLog.info("Intercepted chat back click at container level")
+            withAnimation(NotchAnimation.open) {
+                appState.surface = .sessionList
+            }
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    private func shouldInterceptChatBack(at windowPoint: NSPoint) -> Bool {
+        guard case .chatHistory = appState.surface else { return false }
+        let localPoint = convert(windowPoint, from: nil)
+        let backRect = NSRect(x: 0, y: 32, width: 260, height: 36)
+        return backRect.contains(localPoint)
     }
 }
 
@@ -153,12 +256,11 @@ class PanelWindowController: NSObject, NSWindowDelegate {
     func showPanel() {
         let screen = chosenScreen()
         let contentView = makeHostingView(for: screen)
-        self.hostingView = contentView
 
         let size = panelSize
         let panel = KeyablePanel(
             contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.borderless, .nonactivatingPanel],
+            styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
@@ -269,7 +371,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func makeHostingView(for screen: NSScreen) -> NotchHostingView<NotchPanelView> {
+    private func makeHostingView(for screen: NSScreen) -> HoverBlockingContainerView<NotchPanelView> {
         let hasNotch = ScreenDetector.screenHasNotch(screen)
         let notchHeight = ScreenDetector.topBarHeight(for: screen)
         let notchW = ScreenDetector.notchWidth(for: screen)
@@ -281,10 +383,10 @@ class PanelWindowController: NSObject, NSWindowDelegate {
             notchW: notchW,
             screenWidth: screen.frame.width
         )
-        let contentView = NotchHostingView(rootView: rootView)
-        contentView.sizingOptions = []
-        contentView.translatesAutoresizingMaskIntoConstraints = true
-        return contentView
+        let hostingView = NotchHostingView(rootView: rootView)
+        hostingView.sizingOptions = []
+        self.hostingView = hostingView
+        return HoverBlockingContainerView(hostingView: hostingView, appState: appState)
     }
 
     /// Rebuild the SwiftUI view when the target screen changes
@@ -292,7 +394,6 @@ class PanelWindowController: NSObject, NSWindowDelegate {
     private func rebuildForCurrentScreen(_ screen: NSScreen) {
         guard let panel = panel else { return }
         let contentView = makeHostingView(for: screen)
-        self.hostingView = contentView
         panel.contentView = contentView
         lastChosenScreenSignature = ScreenDetector.signature(for: screen)
         updatePosition()

@@ -87,7 +87,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 appState.surface = .sessionList
             }
             try? await Task.sleep(nanoseconds: 1_500_000_000)
-            if case .sessionList = appState.surface {
+            if case .sessionList = appState.surface, !appState.isPanelHovered {
                 withAnimation(NotchAnimation.close) {
                     appState.surface = .collapsed
                 }

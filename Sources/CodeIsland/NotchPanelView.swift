@@ -177,6 +177,7 @@ struct NotchPanelView: View {
                     case .chatHistory(let sid):
                         if let session = appState.sessions[sid] {
                             SessionChatView(sessionId: sid, session: session, appState: appState)
+                                .id(sid)
                                 .transition(.blurFade.combined(with: .move(edge: .trailing)))
                         }
                     case .collapsed:
@@ -222,6 +223,13 @@ struct NotchPanelView: View {
                 if enabled { UsageTracker.shared.startPolling() }
                 else { UsageTracker.shared.stopPolling() }
             }
+            .onChange(of: appState.surface) { _, surface in
+                if case .chatHistory = surface {
+                    hoverTimer?.invalidate()
+                    hoverTimer = nil
+                    appState.cancelCompletionQueue()
+                }
+            }
             .contentShape(Rectangle())
             .onHover { hovering in
                 // Idle indicator hover
@@ -230,7 +238,25 @@ struct NotchPanelView: View {
                     return
                 }
                 switch appState.surface {
-                case .approvalCard, .questionCard: return
+                case .approvalCard, .questionCard:
+                    hoverTimer?.invalidate()
+                    hoverTimer = nil
+                    return
+                case .chatHistory:
+                    isHovered = hovering
+                    hoverTimer?.invalidate()
+                    hoverTimer = nil
+                    guard !hovering else { return }
+                    guard SettingsManager.shared.collapseOnMouseLeave else { return }
+                    hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { _ in
+                        Task { @MainActor in
+                            guard !isHovered else { return }
+                            withAnimation(NotchAnimation.close) {
+                                appState.surface = .collapsed
+                            }
+                        }
+                    }
+                    return
                 case .completionCard:
                     // Completion card: mark entered on hover-in, block collapse until entered
                     if hovering {
@@ -276,9 +302,10 @@ struct NotchPanelView: View {
                         }
                     }
                 } else {
-                    // Collapse with brief delay to prevent flicker on accidental mouse-out
+                    // Collapse with a slightly longer delay so expanded content
+                    // doesn't disappear the moment the pointer slips outside.
                     hoverTimer?.invalidate()
-                    hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { _ in
+                    hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: false) { _ in
                         Task { @MainActor in
                             guard !isHovered else { return }
                             withAnimation(NotchAnimation.close) {
@@ -1232,8 +1259,9 @@ private struct SessionListView: View {
                             session: session,
                             isCompletion: onlySessionId != nil,
                             onDelete: { appState.dismissSession(sessionId) },
-                            onChat: session.isClaude ? {
+                            onChat: (session.isClaude || session.isCodex) ? {
                                 withAnimation(NotchAnimation.open) {
+                                    appState.cancelCompletionQueue()
                                     appState.surface = .chatHistory(sessionId: sessionId)
                                 }
                             } : nil
@@ -1481,7 +1509,7 @@ private struct SessionCard: View {
                         SessionTag(timeAgo(session.startTime))
                         TerminalBadge(session: session)
                         if hovering {
-                            if session.isClaude, let onChat {
+                            if let onChat {
                                 Button {
                                     onChat()
                                 } label: {
