@@ -567,7 +567,7 @@ final class AppState {
                 // (e.g. approval/question card popped up, session was removed)
                 guard self.sessions[sessionId] != nil else { return }
                 switch self.surface {
-                case .approvalCard, .questionCard: return  // don't overwrite higher-priority surfaces
+                case .approvalCard, .questionCard, .chatHistory: return  // don't overwrite interactive surfaces
                 default: break
                 }
                 if !tabVisible {

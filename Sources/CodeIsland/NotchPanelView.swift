@@ -174,6 +174,11 @@ struct NotchPanelView: View {
                     case .sessionList:
                         SessionListView(appState: appState, onlySessionId: nil)
                             .transition(.blurFade.combined(with: .move(edge: .top)))
+                    case .chatHistory(let sid):
+                        if let session = appState.sessions[sid] {
+                            SessionChatView(sessionId: sid, session: session, appState: appState)
+                                .transition(.blurFade.combined(with: .move(edge: .trailing)))
+                        }
                     case .collapsed:
                         EmptyView()
                     }
@@ -1226,7 +1231,12 @@ private struct SessionListView: View {
                             sessionId: sessionId,
                             session: session,
                             isCompletion: onlySessionId != nil,
-                            onDelete: { appState.dismissSession(sessionId) }
+                            onDelete: { appState.dismissSession(sessionId) },
+                            onChat: session.isClaude ? {
+                                withAnimation(NotchAnimation.open) {
+                                    appState.surface = .chatHistory(sessionId: sessionId)
+                                }
+                            } : nil
                         )
                     }
                 }
@@ -1401,6 +1411,7 @@ private struct SessionCard: View {
     let session: SessionSnapshot
     var isCompletion: Bool = false
     var onDelete: (() -> Void)?
+    var onChat: (() -> Void)?
     @State private var hovering = false
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
     @AppStorage(SettingsKey.aiMessageLines) private var aiMessageLines = SettingsDefaults.aiMessageLines
@@ -1469,18 +1480,33 @@ private struct SessionCard: View {
                         }
                         SessionTag(timeAgo(session.startTime))
                         TerminalBadge(session: session)
-                        if hovering, let onDelete {
-                            Button {
-                                withAnimation(.easeOut(duration: 0.2)) { onDelete() }
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .foregroundStyle(.white.opacity(0.5))
-                                    .frame(width: 18, height: 18)
-                                    .background(Circle().fill(.white.opacity(0.1)))
+                        if hovering {
+                            if session.isClaude, let onChat {
+                                Button {
+                                    onChat()
+                                } label: {
+                                    Image(systemName: "bubble.left.and.text.bubble.right")
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundStyle(.white.opacity(0.5))
+                                        .frame(width: 18, height: 18)
+                                        .background(Circle().fill(.white.opacity(0.1)))
+                                }
+                                .buttonStyle(.plain)
+                                .transition(.opacity)
                             }
-                            .buttonStyle(.plain)
-                            .transition(.opacity)
+                            if let onDelete {
+                                Button {
+                                    withAnimation(.easeOut(duration: 0.2)) { onDelete() }
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundStyle(.white.opacity(0.5))
+                                        .frame(width: 18, height: 18)
+                                        .background(Circle().fill(.white.opacity(0.1)))
+                                }
+                                .buttonStyle(.plain)
+                                .transition(.opacity)
+                            }
                         }
                     }
                 }

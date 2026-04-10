@@ -225,6 +225,11 @@ final class L10n: ObservableObject {
         "scroll_for_more": "Scroll for more",
         "scroll_hidden": "more below",
         "lines": "lines",
+
+        // Chat history
+        "chat_loading": "Loading messages…",
+        "chat_empty": "No messages yet",
+        "chat_placeholder": "Message Claude…",
     ]
 
     private static let zh: [String: String] = [
@@ -421,5 +426,10 @@ final class L10n: ObservableObject {
         "scroll_for_more": "向下滚动查看更多",
         "scroll_hidden": "个未显示",
         "lines": "行",
+
+        // Chat history
+        "chat_loading": "加载消息中…",
+        "chat_empty": "暂无消息",
+        "chat_placeholder": "发送消息给 Claude…",
     ]
 }
