@@ -156,21 +156,19 @@ struct SessionChatView: View {
                                 removal: .opacity
                             ))
                     }
-                    Color.clear
-                        .frame(height: 1)
-                        .id("chat_bottom")
-                        .background(
-                            GeometryReader { geometry in
-                                Color.clear.preference(
-                                    key: ChatBottomAnchorMaxYPreferenceKey.self,
-                                    value: geometry.frame(in: .named("chat_scroll")).maxY
-                                )
-                            }
-                        )
                 }
                 .padding(.horizontal, 18)
                 .padding(.top, 14)
                 .padding(.bottom, 10)
+                .id("chat_bottom")
+                .background(
+                    GeometryReader { geometry in
+                        Color.clear.preference(
+                            key: ChatBottomAnchorMaxYPreferenceKey.self,
+                            value: geometry.frame(in: .named("chat_scroll")).maxY
+                        )
+                    }
+                )
                 .background(
                     ScrollViewLiveScrollObserver { atBottom in
                         guard hasCompletedInitialScroll else { return }

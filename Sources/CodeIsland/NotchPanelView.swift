@@ -1542,6 +1542,15 @@ private struct SessionCard: View {
     @AppStorage(SettingsKey.showAgentDetails) private var showAgentDetails = SettingsDefaults.showAgentDetails
     private var fontSize: CGFloat { CGFloat(contentFontSize) }
     private var aiLineLimit: Int? { aiMessageLines > 0 ? aiMessageLines : nil }
+    private var chatActionAccent: Color {
+        if session.isCodex {
+            return Color(red: 0.34, green: 0.58, blue: 0.96)
+        }
+        if session.isClaude {
+            return Color(red: 0.85, green: 0.47, blue: 0.34)
+        }
+        return .white
+    }
     private var statusNameColor: Color {
         if session.status == .idle && session.interrupted {
             return Color(red: 1.0, green: 0.45, blue: 0.35)
@@ -1609,14 +1618,29 @@ private struct SessionCard: View {
                                 Button {
                                     onChat()
                                 } label: {
-                                    Image(systemName: "bubble.left.and.text.bubble.right")
-                                        .font(.system(size: 9, weight: .bold))
-                                        .foregroundStyle(.white.opacity(0.5))
-                                        .frame(width: 18, height: 18)
-                                        .background(Circle().fill(.white.opacity(0.1)))
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "bubble.left.and.text.bubble.right.fill")
+                                            .font(.system(size: 9.5, weight: .semibold))
+                                        Image(systemName: "chevron.right")
+                                            .font(.system(size: 7, weight: .black))
+                                            .foregroundStyle(.white.opacity(0.52))
+                                    }
+                                    .foregroundStyle(.white.opacity(0.95))
+                                    .padding(.horizontal, 7)
+                                    .frame(height: 20)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .fill(chatActionAccent.opacity(hovering ? 0.24 : 0.18))
+                                    )
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .strokeBorder(chatActionAccent.opacity(hovering ? 0.54 : 0.4), lineWidth: 1)
+                                    }
+                                    .shadow(color: chatActionAccent.opacity(hovering ? 0.24 : 0.14), radius: 8, y: 1)
                                 }
                                 .buttonStyle(.plain)
-                                .transition(.opacity)
+                                .help("Open message panel")
+                                .transition(.opacity.combined(with: .scale(scale: 0.96)))
                             }
                             if let onDelete {
                                 Button {
