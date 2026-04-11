@@ -29,12 +29,14 @@ It focuses on **Claude Code** and **Codex**, using Unix socket IPC to display se
 - **Focused support** — Built specifically for Claude Code and Codex
 - **Live status tracking** — See active sessions, tool calls, and AI responses in real time
 - **Permission management** — Approve/deny tool permissions directly from the panel
-- **Question answering** — Respond to agent questions without leaving your current app
+- **Question answering** — Respond to agent questions without leaving your current app, with fuller question flow support
+- **Session chat panel** — View recent chat history and continue the conversation from the panel
+- **Subscription usage** — Show Claude / Codex subscription usage in the expanded bar
 - **Pixel-art mascots** — Includes dedicated Claude and Codex characters
-- **One-click jump** — Click a session to jump to its terminal tab or IDE window
+- **One-click jump** — Click a session to jump to its terminal tab, Kaku window, or Codex app
 - **Smart suppress** — Tab-level terminal detection: only suppresses notifications when you're looking at the specific session tab, not just the terminal app
 - **Sound effects** — Optional 8-bit sound notifications for session events
-- **Auto hook install** — Automatically configures Claude Code and Codex hooks, with auto-repair and version tracking
+- **Auto hook install** — Automatically configures Claude Code and Codex hooks, with auto-repair, version tracking, and bridge updates
 - **Bilingual UI** — English and Chinese, auto-detects system language
 - **Multi-display** — Works with external monitors, auto-detects notch displays
 
@@ -43,16 +45,9 @@ It focuses on **Claude Code** and **Codex**, using Unix socket IPC to display se
 | | Tool | Events | Jump | Status |
 |:---:|------|--------|------|--------|
 | <img src="docs/images/mascots/claude.gif" width="28"> | <img src="Sources/CodeIsland/Resources/cli-icons/claude.png" width="16"> Claude Code | 13 | Terminal tab | Full |
-| <img src="docs/images/mascots/codex.gif" width="28"> | <img src="Sources/CodeIsland/Resources/cli-icons/codex.png" width="16"> Codex | 3 | Terminal | Basic |
+| <img src="docs/images/mascots/codex.gif" width="28"> | <img src="Sources/CodeIsland/Resources/cli-icons/codex.png" width="16"> Codex | 6 | Terminal / App | Enhanced |
 
 ## Installation
-
-### Homebrew (Recommended)
-
-```bash
-brew tap wxtsky/tap
-brew install --cask codeisland
-```
 
 ### Manual Download
 
@@ -94,13 +89,14 @@ CodeIsland installs lightweight hooks into each supported tool's config. When Cl
 
 ## Settings
 
-CodeIsland provides a 7-tab settings panel:
+CodeIsland provides an 8-tab settings panel:
 
 - **General** — Language, launch at login, display selection
 - **Behavior** — Auto-hide, smart suppress, session cleanup
 - **Appearance** — Panel height, font size, AI reply lines
 - **Mascots** — Preview the Claude and Codex characters and their animations
 - **Sound** — 8-bit sound effects for session events
+- **Shortcuts** — Configure global keyboard shortcuts
 - **Hooks** — View Claude Code / Codex installation status, reinstall or uninstall hooks
 - **About** — Version info and links
 
@@ -108,20 +104,6 @@ CodeIsland provides a 7-tab settings panel:
 
 - macOS 14.0 (Sonoma) or later
 - Works best on MacBooks with a notch, but also works on external displays
-
-## Acknowledgments
-
-This project was inspired by [claude-island](https://github.com/farouqaldori/claude-island) by [@farouqaldori](https://github.com/farouqaldori). Thanks for the original idea of bringing AI agent status into the macOS notch.
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=wxtsky%2FCodeIsland&type=date&legend=bottom-right">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=wxtsky/CodeIsland&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=wxtsky/CodeIsland&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=wxtsky/CodeIsland&type=date&legend=top-left" />
- </picture>
-</a>
 
 ## License
 
