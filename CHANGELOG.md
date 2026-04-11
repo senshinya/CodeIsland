@@ -1,5 +1,65 @@
 # Changelog
 
+## [v1.0.18.1] - 2026-04-12
+
+### English
+- Add a session message panel for viewing recent message history
+- Allow Claude + tmux sessions to continue sending messages directly from the panel
+- Add Codex chat history reading and display support
+- Add Codex usage display
+- Queue completion cards; Claude + tmux sessions can also continue sending messages from the completion state
+- Improve session jump accuracy across terminals, IDEs, cmux, and Kaku
+- Expand AskUserQuestion support with multi-question, multi-select, Other input, and answer deduplication
+- Further focus the product on Claude Code and Codex, trimming non-core CLI integrations
+- Improve session restore and hook handling stability
+
+### 中文
+- 新增会话消息面板，可直接查看历史消息
+- Claude + tmux 会话现已支持在面板内继续发送消息
+- 新增 Codex 聊天记录读取与展示支持
+- 新增 Codex 用量展示
+- 完成态卡片支持排队展示；Claude + tmux 会话也可直接在完成态继续发送消息
+- 优化终端、IDE、cmux 与 Kaku 场景下的会话跳转精度
+- AskUserQuestion 现已支持多题、多选、Other 输入及答案去重
+- 进一步聚焦 Claude Code 与 Codex 两条主线，精简非核心 CLI 支持
+- 提升会话恢复与 hooks 处理的稳定性
+
+## [v1.0.17.1] - 2026-04-10
+
+### English
+- Unify the collapsed bar width between no-session idle and active-idle states; both are now controlled by the "Collapsed Width (Idle)" setting
+- Replace the "Claude" text in the expanded usage bar with the Claude logo
+
+### 中文
+- 修复：统一无会话和有会话空闲状态下折叠条的宽度，现在均由"收起宽度（空闲）"设置统一控制
+- 优化：展开栏用量信息中的"Claude"文字替换为 Claude logo 图标
+
+## [v1.0.17] - 2026-04-10
+
+### English
+- Add Claude usage display with live OAuth usage for 5-hour and 7-day windows, including cached polling and reset countdown, with an Appearance toggle
+- Add panel size controls for collapsed width (idle/working separately), expanded width, and collapsed height offset, all with live preview
+- Add per-status mascot animation speed settings for processing, idle, and waiting, with fallback to the global speed
+- Add session deletion via an X button shown on hover
+- Add a "Bypass" action to auto-approve all future permission requests for the current session
+- Redesign approval buttons into a pill layout: Deny / Allow Once / Allow All / Bypass
+- Increase collapsed-state corner radius for a softer visual style
+- Remove AppLogoView and session group tabs (ALL/STA/CLI) from the expanded header
+- Fix clipping on both wings of the expanded panel by increasing NSPanel window margins
+- Migrate the old collapsedWidthOffset setting to the new per-state keys automatically
+
+### 中文
+- Claude 用量显示 — 实时展示 Claude OAuth 用量（5 小时/7 天窗口），支持缓存轮询与重置倒计时，可在外观设置中开关
+- 面板尺寸调节 — 折叠宽度（空闲/工作状态独立调节）、展开宽度、折叠高度偏移均可通过滑块实时预览，切换时带平滑动画
+- 逐状态吉祥物速度 — processing/idle/waiting 各状态可设置独立动画速度，未设置时回退至全局速度
+- 删除会话 — 悬停会话时显示 X 按钮，可单独移除
+- Bypass 审批 — 新增 "Bypass" 按钮，一键自动批准当前会话后续所有权限请求
+- 重新设计审批按钮：药丸形 Deny / Allow Once / Allow All / Bypass 布局
+- 折叠状态外圆角加大，视觉更柔和
+- 移除展开头部的 AppLogoView 和会话分组标签页（ALL/STA/CLI）
+- 修复展开面板两翼被裁切的问题（NSPanel 窗口宽度增加边距）
+- 旧版 collapsedWidthOffset 自动迁移至按状态区分的新键
+
 ## [v1.0.15] - 2026-04-07
 
 ### English
