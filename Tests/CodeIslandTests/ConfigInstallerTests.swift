@@ -6,6 +6,18 @@ final class ConfigInstallerTests: XCTestCase {
         XCTAssertEqual(ConfigInstaller.allCLIs.map(\.source), ["claude", "codex"])
     }
 
+    func testCodexHooksIncludeSessionEnd() throws {
+        let codex = try XCTUnwrap(ConfigInstaller.allCLIs.first(where: { $0.source == "codex" }))
+        XCTAssertEqual(codex.events.map(\.0), [
+            "SessionStart",
+            "SessionEnd",
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PostToolUse",
+            "Stop",
+        ])
+    }
+
     func testRemoveManagedHookEntriesAlsoPrunesLegacyVibeIslandHooks() throws {
         let hooks: [String: Any] = [
             "SessionEnd": [

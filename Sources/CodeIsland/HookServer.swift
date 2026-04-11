@@ -55,7 +55,10 @@ class HookServer {
     func stop() {
         listener?.cancel()
         listener = nil
-        unlink(HookServer.socketPath)
+        let path = HookServer.socketPath
+        DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+            unlink(path)
+        }
     }
 
     private func handleConnection(_ connection: NWConnection) {

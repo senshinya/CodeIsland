@@ -30,14 +30,24 @@ signal(SIGALRM) { _ in
 // MARK: - Helper Functions
 
 func detectTTY() -> String {
+    for fd in [STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO] {
+        if isatty(fd) != 0, let name = ttyname(fd) {
+            let value = String(cString: name)
+            if value != "/dev/tty" { return value }
+        }
+    }
+
     let fd = open("/dev/tty", O_RDONLY | O_NOCTTY)
     if fd >= 0 {
         if let name = ttyname(fd) {
+            let value = String(cString: name)
             close(fd)
-            return String(cString: name)
+            if value != "/dev/tty" { return value }
+        } else {
+            close(fd)
         }
-        close(fd)
     }
+
     return ""
 }
 

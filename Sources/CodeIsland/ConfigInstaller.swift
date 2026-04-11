@@ -82,6 +82,7 @@ struct ConfigInstaller {
             format: .nested,
             events: [
                 ("SessionStart", 5, false),
+                ("SessionEnd", 5, false),
                 ("UserPromptSubmit", 5, false),
                 ("PreToolUse", 5, false),
                 ("PostToolUse", 5, false),

@@ -27,6 +27,11 @@ struct TerminalActivator {
     /// Most sources should use nativeAppBundles instead (by bundle ID).
     private static let appSources: [String: String] = [:]
 
+    /// Fallback when Codex app is running but the hook payload lacks termBundleId.
+    private static let sourceToNativeAppBundleId: [String: String] = [
+        "codex": "com.openai.codex",
+    ]
+
     /// Bundle IDs of apps that have both APP and CLI modes.
     /// When termBundleId matches, bring that app to front;
     /// otherwise fall through to terminal tab-matching.
@@ -52,10 +57,10 @@ struct TerminalActivator {
             return
         }
 
-        // IDE integrated terminal: bring the IDE to front (no tab-level switching)
+        // IDE integrated terminal: try window-level matching by project folder.
         if session.isIDETerminal,
            let bundleId = effectiveBundleId {
-            activateByBundleId(bundleId)
+            activateIDEWindow(bundleId: bundleId, cwd: session.cwd)
             return
         }
 
@@ -69,6 +74,13 @@ struct TerminalActivator {
             } else {
                 bringToFront(appName)
             }
+            return
+        }
+
+        if session.termBundleId == nil,
+           let nativeBundleId = sourceToNativeAppBundleId[session.source],
+           NSWorkspace.shared.runningApplications.contains(where: { $0.bundleIdentifier == nativeBundleId }) {
+            activateByBundleId(nativeBundleId)
             return
         }
 
@@ -98,9 +110,10 @@ struct TerminalActivator {
         // In tmux, use the client TTY (outer terminal) for tab matching,
         // since ttyPath is the inner tmux pty which won't match the terminal's tab.
         let inTmux = session.tmuxPane != nil && !(session.tmuxPane ?? "").isEmpty
-        let effectiveTty = inTmux
+        let rawEffectiveTty = inTmux
             ? (session.tmuxClientTty ?? session.ttyPath)
             : session.ttyPath
+        let effectiveTty = resolvedTTYPath(session: session, rawTTY: rawEffectiveTty)
 
         // --- Tab-level switching (5 terminals) ---
 
@@ -115,13 +128,14 @@ struct TerminalActivator {
         }
 
         if lower == "kaku" || effectiveBundleId == "fun.tw93.kaku" {
-            activateKaku(ttyPath: effectiveTty, cwd: session.cwd, source: session.source)
+            activateKaku(ttyPath: effectiveTty, cwd: session.cwd, source: session.source, sessionId: sessionId)
             return
         }
 
         if lower == "ghostty" {
             activateGhostty(
                 cwd: session.cwd,
+                tty: effectiveTty,
                 sessionId: sessionId,
                 source: session.source,
                 tmuxPane: session.tmuxPane,
@@ -146,14 +160,18 @@ struct TerminalActivator {
             return
         }
 
-        // Unknown but explicit terminal app bundle: app-level activation is still better
-        // than falling back to a guessed running terminal.
+        if let bundleId = effectiveBundleId,
+           let cwd = session.cwd,
+           !cwd.isEmpty {
+            activateTerminalWindow(bundleId: bundleId, cwd: cwd, fallbackName: termApp)
+            return
+        }
+
         if let bundleId = effectiveBundleId, !bundleId.isEmpty {
             activateByBundleId(bundleId)
             return
         }
 
-        // --- App-level only (Alacritty, Warp, Hyper, Tabby, Rio, etc.) ---
         bringToFront(termApp)
     }
 
@@ -161,17 +179,21 @@ struct TerminalActivator {
 
     private static func activateGhostty(
         cwd: String?,
+        tty: String? = nil,
         sessionId: String? = nil,
         source: String = "claude",
         tmuxPane: String? = nil,
         tmuxEnv: String? = nil
     ) {
         guard let cwd = cwd, !cwd.isEmpty else { bringToFront("Ghostty"); return }
-        // Ensure app is unhidden and brought to front (Space switching)
-        if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.mitchellh.ghostty" }) {
-            if app.isHidden { app.unhide() }
-            app.activate()
+        guard let app = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == "com.mitchellh.ghostty"
+        }) else {
+            bringToFront("Ghostty")
+            return
         }
+        if app.isHidden { app.unhide() }
+        app.activate()
 
         // Resolve tmux title prefix (most reliable for tmux sessions in Ghostty).
         // Example Ghostty title often contains: "<session>:<winIdx>:<winName> - ..."
@@ -286,7 +308,24 @@ struct TerminalActivator {
                 end repeat
             end if
 
-            -- 2) CWD: exact match on Ghostty's working directory property (if available)
+            -- 2) TTY: Ghostty may expose this in future builds; ignore errors when absent.
+            \(tty.map { value in
+                let escaped = escapeAppleScript(value)
+                return """
+                if "\(escaped)" is not "" then
+                    try
+                        set ttyMatches to (every terminal whose tty is "\(escaped)")
+                        if (count of ttyMatches) > 0 then
+                            focus (item 1 of ttyMatches)
+                            activate
+                            return
+                        end if
+                    end try
+                end if
+                """
+            } ?? "")
+
+            -- 3) CWD: exact match on Ghostty's working directory property (if available)
             set matches to {}
             set cwd1 to "\(escapedCwd1)"
             set cwd2 to "\(escapedCwd2)"
@@ -301,7 +340,7 @@ struct TerminalActivator {
                 end try
             end if
 
-            -- 3) Fallback: match by title when Ghostty can't report the true working directory (common in tmux)
+            -- 4) Fallback: match by title when Ghostty can't report the true working directory (common in tmux)
             if (count of matches) = 0 then
                 set dirName to "\(escapedDir)"
                 set tildeCwd to "\(escapedTilde)"
@@ -338,10 +377,14 @@ struct TerminalActivator {
 
     /// Fallback when iTerm2 session ID is unavailable: try tty match, then cwd/name match.
     private static func activateITermByTtyOrCwd(tty: String?, cwd: String?) {
-        if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.googlecode.iterm2" }) {
-            if app.isHidden { app.unhide() }
-            app.activate()
+        guard let app = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == "com.googlecode.iterm2"
+        }) else {
+            bringToFront("iTerm2")
+            return
         }
+        if app.isHidden { app.unhide() }
+        app.activate()
         // Strategy 1: match by tty (precise)
         if let tty = tty, !tty.isEmpty {
             let fullTty = tty.hasPrefix("/dev/") ? tty : "/dev/\(tty)"
@@ -395,10 +438,14 @@ struct TerminalActivator {
     }
 
     private static func activateITerm(sessionId: String) {
-        if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.googlecode.iterm2" }) {
-            if app.isHidden { app.unhide() }
-            app.activate()
+        guard let app = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == "com.googlecode.iterm2"
+        }) else {
+            bringToFront("iTerm2")
+            return
         }
+        if app.isHidden { app.unhide() }
+        app.activate()
         let script = """
         try
             tell application "iTerm2"
@@ -424,6 +471,12 @@ struct TerminalActivator {
     // MARK: - Terminal.app (AppleScript: match by TTY, fallback to CWD)
 
     private static func activateTerminalApp(ttyPath: String?, cwd: String?) {
+        guard NSWorkspace.shared.runningApplications.contains(where: {
+            $0.bundleIdentifier == "com.apple.Terminal"
+        }) else {
+            bringToFront("Terminal")
+            return
+        }
         // Strategy 1: tty match (precise)
         if let tty = ttyPath, !tty.isEmpty {
             let escaped = escapeAppleScript(tty)
@@ -482,7 +535,7 @@ struct TerminalActivator {
         let is_active: Bool?
     }
 
-    private static func activateKaku(ttyPath: String?, cwd: String?, source: String = "claude") {
+    private static func activateKaku(ttyPath: String?, cwd: String?, source: String = "claude", sessionId: String? = nil) {
         activateByBundleId("fun.tw93.kaku")
         guard let bin = findBinary("kaku") else { return }
 
@@ -490,8 +543,8 @@ struct TerminalActivator {
             guard let data = runProcess(bin, args: ["cli", "list", "--format", "json"]),
                   let panes = try? JSONDecoder().decode([KakuPaneInfo].self, from: data) else { return }
 
-            if let tty = ttyPath, !tty.isEmpty,
-               let pane = panes.first(where: { $0.tty_name == tty }) {
+            if let tty = normalizeTTYPath(ttyPath),
+               let pane = panes.first(where: { normalizeTTYPath($0.tty_name) == tty }) {
                 _ = runProcess(bin, args: ["cli", "activate-tab", "--tab-id", "\(pane.tab_id)"])
                 _ = runProcess(bin, args: ["cli", "activate-pane", "--pane-id", "\(pane.pane_id)"])
                 return
@@ -499,17 +552,31 @@ struct TerminalActivator {
 
             let normalizedCwd = cwd.flatMap(normalizeFileURLPath)
             let normalizedSource = source.lowercased()
-
-            let bestPane = panes.first(where: { pane in
+            let shortSessionId = sessionId.map { String($0.prefix(8)).lowercased() }
+            let sessionMatches = panes.filter { pane in
+                guard let shortSessionId else { return false }
+                let title = (pane.title ?? "").lowercased()
+                return title.contains(shortSessionId)
+            }
+            let bestPane = sessionMatches.first(where: { pane in
                 let paneCwd = normalizeFileURLPath(pane.cwd)
                 let title = (pane.title ?? "").lowercased()
                 let cwdMatches = normalizedCwd != nil && paneCwd == normalizedCwd
                 let titleMatches = !normalizedSource.isEmpty && title.contains(normalizedSource)
                 return cwdMatches && titleMatches
-            }) ?? panes.first(where: { pane in
+            }) ?? sessionMatches.first ?? panes.first(where: { pane in
                 let paneCwd = normalizeFileURLPath(pane.cwd)
-                return normalizedCwd != nil && paneCwd == normalizedCwd
-            })
+                let title = (pane.title ?? "").lowercased()
+                let cwdMatches = normalizedCwd != nil && paneCwd == normalizedCwd
+                let titleMatches = !normalizedSource.isEmpty && title.contains(normalizedSource)
+                return cwdMatches && titleMatches
+            }) ?? {
+                let cwdMatches = panes.filter { pane in
+                    let paneCwd = normalizeFileURLPath(pane.cwd)
+                    return normalizedCwd != nil && paneCwd == normalizedCwd
+                }
+                return cwdMatches.count == 1 ? cwdMatches[0] : nil
+            }()
 
             if let pane = bestPane {
                 _ = runProcess(bin, args: ["cli", "activate-tab", "--tab-id", "\(pane.tab_id)"])
@@ -576,6 +643,87 @@ struct TerminalActivator {
             _ = runProcess(bin, args: ["select-window", "-t", pane], env: tmuxProcessEnv(tmuxEnv))
             _ = runProcess(bin, args: ["select-pane", "-t", pane], env: tmuxProcessEnv(tmuxEnv))
         }
+    }
+
+    private static func activateIDEWindow(bundleId: String, cwd: String?) {
+        guard let cwd = cwd, !cwd.isEmpty else {
+            activateByBundleId(bundleId)
+            return
+        }
+        let folderName = (cwd as NSString).lastPathComponent
+        guard !folderName.isEmpty else {
+            activateByBundleId(bundleId)
+            return
+        }
+
+        guard let app = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == bundleId
+        }) else {
+            activateByBundleId(bundleId)
+            return
+        }
+
+        if app.isHidden { app.unhide() }
+        app.activate()
+
+        let appName = app.localizedName ?? "Application"
+        let escapedFolder = escapeAppleScript(folderName)
+        let script = """
+        tell application "System Events"
+            tell process "\(escapeAppleScript(appName))"
+                set frontmost to true
+                set bestWindow to missing value
+                set bestLen to 999999
+                repeat with w in windows
+                    try
+                        set wName to name of w as text
+                        if wName contains "\(escapedFolder)" then
+                            set wLen to count of wName
+                            if wLen < bestLen then
+                                set bestWindow to w
+                                set bestLen to wLen
+                            end if
+                        end if
+                    end try
+                end repeat
+                if bestWindow is not missing value then
+                    perform action "AXRaise" of bestWindow
+                end if
+            end tell
+        end tell
+        """
+        runAppleScript(script)
+    }
+
+    private static func activateTerminalWindow(bundleId: String, cwd: String, fallbackName: String) {
+        guard let app = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == bundleId
+        }) else {
+            bringToFront(fallbackName)
+            return
+        }
+        if app.isHidden { app.unhide() }
+        app.activate()
+
+        let folderName = (cwd as NSString).lastPathComponent
+        guard !folderName.isEmpty else { return }
+
+        let appName = app.localizedName ?? fallbackName
+        let script = """
+        tell application "System Events"
+            tell process "\(escapeAppleScript(appName))"
+                repeat with w in windows
+                    try
+                        if name of w contains "\(escapeAppleScript(folderName))" then
+                            perform action "AXRaise" of w
+                            return
+                        end if
+                    end try
+                end repeat
+            end tell
+        end tell
+        """
+        runAppleScript(script)
     }
 
     private static func resolveTmuxHostTerminal(_ session: SessionSnapshot) -> ResolvedTerminal? {
@@ -821,5 +969,32 @@ struct TerminalActivator {
             return URL(string: value)?.path
         }
         return value
+    }
+
+    private static func normalizeTTYPath(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty,
+              value != "/dev/tty",
+              value != "tty" else { return nil }
+        if value.hasPrefix("/dev/") { return value }
+        if value.hasPrefix("tty") || value.hasPrefix("pts/") {
+            return "/dev/\(value)"
+        }
+        return value
+    }
+
+    private static func resolvedTTYPath(session: SessionSnapshot, rawTTY: String?) -> String? {
+        if let normalized = normalizeTTYPath(rawTTY) {
+            return normalized
+        }
+        guard let pid = session.cliPid, pid > 0 else { return nil }
+        guard let data = runProcess("/bin/ps", args: ["-o", "tty=", "-p", "\(pid)"]),
+              let output = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !output.isEmpty,
+              output != "??" else {
+            return nil
+        }
+        return normalizeTTYPath(output)
     }
 }
