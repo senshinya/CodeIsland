@@ -21,9 +21,7 @@ struct SessionChatView: View {
     @State private var messages: [SessionChatMessage] = []
     @State private var pendingUserMessages: [SessionChatMessage] = []
     @State private var resolvedPendingDisplayIDs: [String: String] = [:]
-    @State private var messageInput = ""
     @State private var isLoading = true
-    @State private var inputFocusRequest = 0
     @State private var fileWatchSource: DispatchSourceFileSystemObject?
     @State private var watchedFileDescriptor: Int32 = -1
     @State private var watchedTranscriptPath: String?
@@ -87,8 +85,13 @@ struct SessionChatView: View {
                 messageList
             }
 
-            if canShowInputBar {
-                inputBar
+            if SessionMessageBarSupport.canShow(for: session) {
+                SessionMessageInputBar(
+                    session: session,
+                    fontSize: fontSize,
+                    onFocusChange: { appState.setMessageInputFocused($0) },
+                    onSubmitText: { sendMessage($0) }
+                )
             }
         }
         .onAppear {
@@ -109,6 +112,7 @@ struct SessionChatView: View {
             initialContentRevealTask?.cancel()
             isPerformingProgrammaticScroll = false
             stopWatchingTranscript()
+            appState.setMessageInputFocused(false)
         }
         .onChange(of: session.providerSessionId) { _, _ in
             refreshTranscriptBindingIfNeeded()
@@ -590,50 +594,10 @@ struct SessionChatView: View {
             .foregroundColor(.white.opacity(0.48))
     }
 
-    // MARK: - Input Bar
-
-    private var canSendMessage: Bool {
-        guard let pane = session.tmuxPane?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
-        return !pane.isEmpty
-    }
-
-    private var canShowInputBar: Bool {
-        session.isClaude && canSendMessage
-    }
-
     private var hasVisibleSessionHistory: Bool {
         !session.recentMessages.isEmpty
             || !(session.lastUserPrompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
             || !(session.lastAssistantMessage?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-    }
-
-    private var inputBar: some View {
-        ChatInputEditor(
-            text: $messageInput,
-            font: .monospacedSystemFont(ofSize: fontSize + 1, weight: .regular),
-            placeholderText: L10n.shared["chat_placeholder"],
-            focusRequest: inputFocusRequest,
-            onSubmit: sendMessage
-        )
-        .frame(height: 24)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(.white.opacity(0.09))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .strokeBorder(.white.opacity(0.16), lineWidth: 1.2)
-                )
-        )
-        .padding(.horizontal, 18)
-        .padding(.top, 10)
-        .padding(.bottom, 14)
-        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .onTapGesture {
-            inputFocusRequest += 1
-        }
-        .onHover { _ in }
     }
 
     // MARK: - Actions
@@ -878,8 +842,8 @@ struct SessionChatView: View {
         }
     }
 
-    private func sendMessage() {
-        let text = messageInput.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func sendMessage(_ rawText: String) {
+        let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         let pendingMessage = SessionChatMessage(
             id: "pending-user-\(UUID().uuidString)",
@@ -893,7 +857,6 @@ struct SessionChatView: View {
         prepareForMessageListChange()
         animatedAppearanceMessageIDs = hasCompletedInitialScroll ? [pendingMessage.id] : []
         pendingUserMessages.append(pendingMessage)
-        messageInput = ""
         Task { @MainActor in
             if watchedTranscriptPath == nil {
                 startTranscriptDiscovery()
@@ -902,9 +865,78 @@ struct SessionChatView: View {
         Task.detached {
             await MessageSender.send(text, to: session)
         }
+}
+
+enum SessionMessageBarSupport {
+    static func canShow(for session: SessionSnapshot) -> Bool {
+        guard session.isClaude,
+              let pane = session.tmuxPane?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return false
+        }
+        return !pane.isEmpty
+    }
+}
+
+struct SessionMessageInputBar: View {
+    let session: SessionSnapshot
+    let fontSize: CGFloat
+    var onFocusChange: ((Bool) -> Void)? = nil
+    var onSubmitText: ((String) -> Void)? = nil
+    var outerHorizontalPadding: CGFloat = 18
+    var outerTopPadding: CGFloat = 10
+    var outerBottomPadding: CGFloat = 14
+
+    @State private var messageInput = ""
+    @State private var inputFocusRequest = 0
+
+    var body: some View {
+        ChatInputEditor(
+            text: $messageInput,
+            font: .monospacedSystemFont(ofSize: fontSize + 1, weight: .regular),
+            placeholderText: L10n.shared["chat_placeholder"],
+            focusRequest: inputFocusRequest,
+            onSubmit: submitMessage,
+            onFocusChange: onFocusChange
+        )
+        .frame(height: 24)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(.white.opacity(0.09))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .strokeBorder(.white.opacity(0.16), lineWidth: 1.2)
+                )
+        )
+        .padding(.horizontal, outerHorizontalPadding)
+        .padding(.top, outerTopPadding)
+        .padding(.bottom, outerBottomPadding)
+        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .onTapGesture {
+            inputFocusRequest += 1
+        }
+        .onHover { _ in }
+        .onDisappear {
+            onFocusChange?(false)
+        }
     }
 
-    // MARK: - Helpers
+    private func submitMessage() {
+        let text = messageInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        messageInput = ""
+        if let onSubmitText {
+            onSubmitText(text)
+        } else {
+            Task.detached {
+                await MessageSender.send(text, to: session)
+            }
+        }
+    }
+}
+
+// MARK: - Helpers
 
     nonisolated private static func readMessages(source: String, at path: String) -> [SessionChatMessage] {
         switch source {
@@ -1187,6 +1219,7 @@ private struct ChatInputEditor: NSViewRepresentable {
     var placeholderText: String
     var focusRequest: Int
     var onSubmit: () -> Void
+    var onFocusChange: ((Bool) -> Void)? = nil
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
@@ -1232,6 +1265,7 @@ private struct ChatInputEditor: NSViewRepresentable {
         )
         context.coordinator.placeholderAttr = placeholder
         context.coordinator.textView = textView
+        textView.onFocusChange = context.coordinator.onFocusChange
         context.coordinator.updatePlaceholder()
 
         return scrollView
@@ -1247,6 +1281,8 @@ private struct ChatInputEditor: NSViewRepresentable {
             context.coordinator.updatePlaceholder()
         }
         context.coordinator.onSubmit = onSubmit
+        context.coordinator.onFocusChange = onFocusChange
+        textView.onFocusChange = context.coordinator.onFocusChange
         if context.coordinator.lastFocusRequest != focusRequest {
             context.coordinator.lastFocusRequest = focusRequest
             DispatchQueue.main.async {
@@ -1263,6 +1299,7 @@ private struct ChatInputEditor: NSViewRepresentable {
     class Coordinator: NSObject, NSTextViewDelegate {
         var parent: ChatInputEditor
         var onSubmit: (() -> Void)?
+        var onFocusChange: ((Bool) -> Void)?
         var placeholderAttr: NSAttributedString?
         weak var textView: NSTextView?
         private var placeholderView: NSTextField?
@@ -1271,6 +1308,7 @@ private struct ChatInputEditor: NSViewRepresentable {
         init(_ parent: ChatInputEditor) {
             self.parent = parent
             self.onSubmit = parent.onSubmit
+            self.onFocusChange = parent.onFocusChange
             self.lastFocusRequest = parent.focusRequest
         }
 
@@ -1315,6 +1353,7 @@ private struct ChatInputEditor: NSViewRepresentable {
 
 private final class ChatInputTextView: NSTextView {
     var suppressAutomaticFocus = true
+    var onFocusChange: ((Bool) -> Void)?
 
     override var acceptsFirstResponder: Bool {
         if suppressAutomaticFocus {
@@ -1327,6 +1366,23 @@ private final class ChatInputTextView: NSTextView {
         suppressAutomaticFocus = false
         window?.makeFirstResponder(self)
         super.mouseDown(with: event)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted {
+            onFocusChange?(true)
+        }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned {
+            suppressAutomaticFocus = true
+            onFocusChange?(false)
+        }
+        return resigned
     }
 }
 

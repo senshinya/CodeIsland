@@ -34,13 +34,17 @@ final class AppState {
         if case .completionCard(let id) = surface { return id }
         return nil
     }
+    var retainedCompletionSessionId: String?
+    var retainedCompletionSession: SessionSnapshot?
 
     private var maxHistory: Int { SettingsManager.shared.maxToolHistory }
     private var cleanupTimer: Timer?
     private var autoCollapseTask: Task<Void, Never>?
     private var completionQueue: [String] = []
+    private var completionAutoCollapseDeadline: Date?
     /// Mouse must enter the panel before auto-collapse is allowed (prevents instant dismiss)
     var completionHasBeenEntered = false
+    var isMessageInputFocused = false
     private var processMonitors: [String: (source: DispatchSourceProcess, process: ProcessIdentity)] = [:]
     private var exitingSessions: [String: ProcessIdentity] = [:]
     private var saveTimer: Timer?
@@ -354,6 +358,7 @@ final class AppState {
     }
 
     private func removeSession(_ sessionId: String) {
+        let removedSession = sessions[sessionId]
         // Resume ALL pending continuations for this session
         drainPermissions(forSession: sessionId)
         drainQuestions(forSession: sessionId)
@@ -361,9 +366,8 @@ final class AppState {
         if surface.sessionId == sessionId {
             autoCollapseTask?.cancel()
             if case .completionCard = surface {
-                if !showNextPending() {
-                    showNextCompletionOrCollapse()
-                }
+                retainedCompletionSessionId = sessionId
+                retainedCompletionSession = removedSession
             } else {
                 _ = showNextPending()
             }
@@ -572,41 +576,50 @@ final class AppState {
             let tabVisible = TerminalVisibilityDetector.isSessionTabVisible(sessionCopy)
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                // Verify state hasn't changed while we were checking
-                // (e.g. approval/question card popped up, session was removed)
-                guard self.sessions[sessionId] != nil else { return }
+                let liveSession = self.sessions[sessionId]
                 switch self.surface {
                 case .approvalCard, .questionCard, .chatHistory: return  // don't overwrite interactive surfaces
                 default: break
                 }
                 if !tabVisible {
                     withAnimation(NotchAnimation.pop) {
-                        self.doShowCompletion(sessionId)
+                        self.doShowCompletion(
+                            sessionId,
+                            retainedSession: liveSession == nil ? sessionCopy : nil
+                        )
                     }
                 }
             }
         }
     }
 
-    private func doShowCompletion(_ sessionId: String) {
+    private func doShowCompletion(_ sessionId: String, retainedSession: SessionSnapshot? = nil) {
         activeSessionId = sessionId
         surface = .completionCard(sessionId: sessionId)
         completionHasBeenEntered = false
-
-        autoCollapseTask?.cancel()
-        autoCollapseTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            guard !Task.isCancelled else { return }
-            showNextCompletionOrCollapse()
+        if let retainedSession, sessions[sessionId] == nil {
+            retainedCompletionSessionId = sessionId
+            retainedCompletionSession = retainedSession
+        } else {
+            retainedCompletionSessionId = nil
+            retainedCompletionSession = nil
         }
+        completionAutoCollapseDeadline = Date().addingTimeInterval(5)
+        scheduleCompletionAutoCollapse(after: 5)
     }
 
     func cancelCompletionQueue() {
         autoCollapseTask?.cancel()
+        completionAutoCollapseDeadline = nil
+        retainedCompletionSessionId = nil
+        retainedCompletionSession = nil
         completionQueue.removeAll()
     }
 
     private func showNextCompletionOrCollapse() {
+        completionAutoCollapseDeadline = nil
+        retainedCompletionSessionId = nil
+        retainedCompletionSession = nil
         while let next = completionQueue.first {
             completionQueue.removeFirst()
             if sessions[next] != nil {
@@ -618,6 +631,60 @@ final class AppState {
         }
         withAnimation(NotchAnimation.close) {
             surface = .collapsed
+        }
+    }
+
+    private func scheduleCompletionAutoCollapse(after delay: TimeInterval) {
+        autoCollapseTask?.cancel()
+        autoCollapseTask = Task { @MainActor in
+            let nanos = UInt64(max(0, delay) * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: nanos)
+            guard !Task.isCancelled else { return }
+            guard !isMessageInputFocused else { return }
+            showNextCompletionOrCollapse()
+        }
+    }
+
+    func setMessageInputFocused(_ focused: Bool) {
+        guard isMessageInputFocused != focused else { return }
+        isMessageInputFocused = focused
+
+        if focused {
+            autoCollapseTask?.cancel()
+            return
+        }
+
+        if !permissionQueue.isEmpty || !questionQueue.isEmpty {
+            withAnimation(NotchAnimation.open) {
+                _ = showNextPending()
+            }
+            return
+        }
+
+        if case .completionCard = surface,
+           let deadline = completionAutoCollapseDeadline {
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining <= 0 {
+                showNextCompletionOrCollapse()
+            } else {
+                scheduleCompletionAutoCollapse(after: remaining)
+            }
+        }
+    }
+
+    func completeCompletionMessageSubmission() {
+        isMessageInputFocused = false
+        autoCollapseTask?.cancel()
+
+        if !permissionQueue.isEmpty || !questionQueue.isEmpty {
+            withAnimation(NotchAnimation.open) {
+                _ = showNextPending()
+            }
+            return
+        }
+
+        if case .completionCard = surface {
+            showNextCompletionOrCollapse()
         }
     }
 
@@ -910,7 +977,7 @@ final class AppState {
         permissionQueue.append(request)
 
         // Show UI only if this is the first (or only) queued item
-        if permissionQueue.count == 1 {
+        if permissionQueue.count == 1 && !isMessageInputFocused {
             activeSessionId = sessionId
             surface = .approvalCard(sessionId: sessionId)
             SoundManager.shared.handleEvent("PermissionRequest")
@@ -1013,7 +1080,7 @@ final class AppState {
         let request = QuestionRequest(event: event, question: question, continuation: continuation)
         questionQueue.append(request)
 
-        if questionQueue.count == 1 {
+        if questionQueue.count == 1 && !isMessageInputFocused {
             activeSessionId = sessionId
             withAnimation(NotchAnimation.open) {
                 surface = .questionCard(sessionId: sessionId)
@@ -1114,7 +1181,7 @@ final class AppState {
         )
         questionQueue.append(request)
 
-        if questionQueue.count == 1 {
+        if questionQueue.count == 1 && !isMessageInputFocused {
             activeSessionId = sessionId
             withAnimation(NotchAnimation.open) {
                 surface = .questionCard(sessionId: sessionId)
