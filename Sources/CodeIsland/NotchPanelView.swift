@@ -171,10 +171,10 @@ struct NotchPanelView: View {
                         }
                     case .completionCard:
                         SessionListView(appState: appState, onlySessionId: appState.justCompletedSessionId)
-                            .transition(.blurFade.combined(with: .move(edge: .top)))
+                            .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .top)))
                     case .sessionList:
                         SessionListView(appState: appState, onlySessionId: nil)
-                            .transition(.blurFade.combined(with: .move(edge: .top)))
+                            .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .top)))
                     case .chatHistory(let sid):
                         if let session = appState.sessions[sid] {
                             SessionChatView(sessionId: sid, session: session, appState: appState)
