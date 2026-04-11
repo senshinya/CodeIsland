@@ -4,12 +4,15 @@ import Darwin
 
 /// Chat history view for a supported CLI session.
 struct SessionChatView: View {
+    private static let chatBottomSentinelID = "chat_bottom_sentinel"
+
     private enum InitialScrollTiming {
         static let stableSampleInterval: Duration = .milliseconds(16)
         static let stableDetectionTimeout: Duration = .milliseconds(200)
         static let bottomLockSampleInterval: Duration = .milliseconds(16)
-        static let bottomLockTimeout: Duration = .milliseconds(250)
+        static let bottomLockTimeout: Duration = .milliseconds(350)
         static let requiredStableSamples = 2
+        static let finalVerificationDelays = [0, 16, 32, 64, 96]
     }
 
     let sessionId: String
@@ -27,8 +30,11 @@ struct SessionChatView: View {
     @State private var watcherReloadTask: Task<Void, Never>?
     @State private var transcriptDiscoveryTask: Task<Void, Never>?
     @State private var scrollToBottomTask: Task<Void, Never>?
+    @State private var initialContentRevealTask: Task<Void, Never>?
     @State private var hasCompletedInitialScroll = false
+    @State private var hasRevealedInitialContent = false
     @State private var isPinnedToBottom = true
+    @State private var newMessageCount = 0
     @State private var shouldAutoScrollOnNextLayout = true
     @State private var pendingPinnedScroll = false
     @State private var isPerformingProgrammaticScroll = false
@@ -40,8 +46,12 @@ struct SessionChatView: View {
     @AppStorage(SettingsKey.maxPanelHeight) private var maxPanelHeight = SettingsDefaults.maxPanelHeight
 
     private var fontSize: CGFloat { CGFloat(contentFontSize) }
-    private let accent = Color(red: 0.85, green: 0.47, blue: 0.34)
+    private let claudeAccent = Color(red: 0.85, green: 0.47, blue: 0.34)
+    private let codexAccent = Color(red: 0.32, green: 0.60, blue: 0.96)
     private let toolGreen = Color(red: 0.40, green: 0.88, blue: 0.62)
+    private var newMessagesAccent: Color {
+        session.source == "codex" ? codexAccent : claudeAccent
+    }
     private var displayedMessages: [DisplayedChatMessage] {
         SessionChatDisplayReconciler.displayMessages(
             messages: messages,
@@ -83,16 +93,20 @@ struct SessionChatView: View {
         }
         .onAppear {
             hasCompletedInitialScroll = false
+            hasRevealedInitialContent = false
             isPinnedToBottom = true
+            newMessageCount = 0
             shouldAutoScrollOnNextLayout = true
             pendingPinnedScroll = false
             pendingPinnedDocumentHeight = nil
             animatedAppearanceMessageIDs = []
             isPerformingProgrammaticScroll = false
+            scheduleInitialContentRevealFallback()
             loadMessages()
         }
         .onDisappear {
             scrollToBottomTask?.cancel()
+            initialContentRevealTask?.cancel()
             isPerformingProgrammaticScroll = false
             stopWatchingTranscript()
         }
@@ -165,33 +179,42 @@ struct SessionChatView: View {
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(alignment: .leading, spacing: 4) {
-                    ForEach(visibleMessages) { msg in
-                        messageRow(msg.message)
-                            .modifier(
-                                MessageAppearanceModifier(
-                                    animateOnAppear: animatedAppearanceMessageIDs.contains(msg.id)
+                VStack(alignment: .leading, spacing: 0) {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        ForEach(visibleMessages) { msg in
+                            messageRow(msg.message)
+                                .modifier(
+                                    MessageAppearanceModifier(
+                                        animateOnAppear: animatedAppearanceMessageIDs.contains(msg.id)
+                                    )
                                 )
-                            )
-                            .id(msg.id)
-                            .transition(.asymmetric(
-                                insertion: .move(edge: .bottom).combined(with: .opacity),
-                                removal: .opacity
-                            ))
+                                .id(msg.id)
+                                .transition(.asymmetric(
+                                    insertion: .move(edge: .bottom).combined(with: .opacity),
+                                    removal: .opacity
+                                ))
+                        }
                     }
+                    .padding(.horizontal, 18)
+                    .padding(.top, 14)
+                    .padding(.bottom, 10)
+
+                    Color.clear
+                        .frame(height: 1)
+                        .id(Self.chatBottomSentinelID)
                 }
-                .padding(.horizontal, 18)
-                .padding(.top, 14)
-                .padding(.bottom, 10)
-                .id("chat_bottom")
                 .background(
                     ScrollViewLiveScrollObserver { atBottom in
                         guard hasCompletedInitialScroll else { return }
                         guard !isPerformingProgrammaticScroll else { return }
+                        guard !pendingPinnedScroll else { return }
                         scrollToBottomTask?.cancel()
                         pendingPinnedScroll = false
                         shouldAutoScrollOnNextLayout = false
                         isPinnedToBottom = atBottom
+                        if atBottom {
+                            newMessageCount = 0
+                        }
                     } onResolveScrollView: { scrollView in
                         scrollController.attach(scrollView)
                     }
@@ -200,7 +223,14 @@ struct SessionChatView: View {
             .coordinateSpace(name: "chat_scroll")
             .textSelection(.disabled)
             .frame(maxHeight: chatMaxHeight)
-            .opacity(hasCompletedInitialScroll ? 1 : 0)
+            .opacity(hasRevealedInitialContent ? 1 : 0)
+            .overlay(alignment: .bottom) {
+                if shouldShowNewMessagesButton {
+                    newMessagesButton(with: proxy)
+                        .padding(.bottom, 16)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
             .onAppear {
                 scrollToBottom(with: proxy, isInitial: true)
             }
@@ -215,19 +245,42 @@ struct SessionChatView: View {
         }
     }
 
-    private func scrollToBottom(with proxy: ScrollViewProxy, isInitial: Bool = false) {
+    private func scrollToBottom(
+        with proxy: ScrollViewProxy,
+        isInitial: Bool = false,
+        delay: Duration? = .milliseconds(75),
+        verifyBottom: Bool = false
+    ) {
         let wasInitialPending = isInitial || !hasCompletedInitialScroll
         scrollToBottomTask?.cancel()
+        pendingPinnedScroll = true
         scrollToBottomTask = Task { @MainActor in
             if wasInitialPending {
                 await waitForStableInitialLayout()
-            } else {
-                try? await Task.sleep(for: .milliseconds(75))
+            } else if let delay {
+                try? await Task.sleep(for: delay)
             }
             guard !Task.isCancelled else { return }
             performScrollToBottom(with: proxy)
             if wasInitialPending {
+                revealInitialContent()
+            }
+            if verifyBottom {
+                let reachedBottom = await confirmBottomPosition(with: proxy)
+                guard !Task.isCancelled else { return }
+                isPinnedToBottom = reachedBottom
+                if reachedBottom {
+                    newMessageCount = 0
+                }
+            }
+            if wasInitialPending {
                 await settleInitialBottomLock(with: proxy)
+                let reachedBottom = await confirmBottomPosition(
+                    with: proxy,
+                    delays: InitialScrollTiming.finalVerificationDelays
+                )
+                guard !Task.isCancelled else { return }
+                isPinnedToBottom = reachedBottom
             }
 
             pendingPinnedDocumentHeight = nil
@@ -236,8 +289,55 @@ struct SessionChatView: View {
             shouldAutoScrollOnNextLayout = false
             if wasInitialPending {
                 hasCompletedInitialScroll = true
+                revealInitialContent()
+            }
+            if !verifyBottom, scrollController.documentHeight != nil {
+                isPinnedToBottom = scrollController.isAtBottom
+            }
+            if isPinnedToBottom {
+                newMessageCount = 0
             }
         }
+    }
+
+    private func confirmBottomPosition(
+        with proxy: ScrollViewProxy,
+        delays: [Int] = [0, 16, 32]
+    ) async -> Bool {
+        for (index, delay) in delays.enumerated() {
+            if delay > 0 {
+                try? await Task.sleep(for: .milliseconds(delay))
+            } else {
+                await Task.yield()
+            }
+            guard !Task.isCancelled else { return false }
+
+            if scrollController.documentHeight != nil, scrollController.isAtBottom {
+                return true
+            }
+
+            if index == 0 {
+                performScrollToBottom(with: proxy, preferAnchorScroll: true)
+            }
+        }
+
+        return scrollController.documentHeight != nil && scrollController.isAtBottom
+    }
+
+    private func scheduleInitialContentRevealFallback() {
+        initialContentRevealTask?.cancel()
+        initialContentRevealTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            revealInitialContent()
+        }
+    }
+
+    @MainActor
+    private func revealInitialContent() {
+        initialContentRevealTask?.cancel()
+        initialContentRevealTask = nil
+        hasRevealedInitialContent = true
     }
 
     private func waitForStableInitialLayout() async {
@@ -295,10 +395,17 @@ struct SessionChatView: View {
             } else {
                 stableSampleCount += 1
                 if stableSampleCount >= InitialScrollTiming.requiredStableSamples {
-                    return
+                    if scrollController.isAtBottom {
+                        return
+                    }
+                    performScrollToBottom(with: proxy)
+                    stableSampleCount = 0
+                    lastHeight = scrollController.documentHeight ?? currentHeight
                 }
             }
         }
+
+        performScrollToBottom(with: proxy)
     }
 
     private func preservePinnedBottom(with proxy: ScrollViewProxy, previousDocumentHeight: CGFloat) {
@@ -335,7 +442,7 @@ struct SessionChatView: View {
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
-                proxy.scrollTo("chat_bottom", anchor: .bottom)
+                proxy.scrollTo(Self.chatBottomSentinelID, anchor: .bottom)
             }
         }
         programmaticScrollResetTask = Task { @MainActor in
@@ -355,6 +462,32 @@ struct SessionChatView: View {
     private var chatMaxHeight: CGFloat {
         let h = maxPanelHeight > 0 ? CGFloat(maxPanelHeight) : 400
         return h - 80
+    }
+
+    private var shouldShowNewMessagesButton: Bool {
+        hasCompletedInitialScroll && !isPinnedToBottom && newMessageCount > 0
+    }
+
+    private func newMessagesButton(with proxy: ScrollViewProxy) -> some View {
+        Button {
+            scrollToBottom(with: proxy, delay: nil, verifyBottom: true)
+        } label: {
+            Text(String(format: L10n.shared["chat_new_messages_count"], newMessageCount))
+                .font(.system(size: fontSize, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.96))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 9)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(.black.opacity(0.78))
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .strokeBorder(newMessagesAccent.opacity(0.55), lineWidth: 1)
+                        )
+                        .shadow(color: .black.opacity(0.22), radius: 12, y: 5)
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Message Rows
@@ -710,19 +843,13 @@ struct SessionChatView: View {
             resolvedPendingDisplayIDs = nextDisplayIDs
         }
 
-        let shouldAnimateInsertion = shouldAnimateMessageInsertion(
-            from: oldDisplayedMessages,
-            to: newDisplayedMessages
-        )
+        if !shouldAutoScrollOnNextLayout, hasCompletedInitialScroll {
+            newMessageCount += insertedDisplayIDs.count
+        }
 
         if shouldAutoScrollOnNextLayout {
             animatedAppearanceMessageIDs = hasCompletedInitialScroll ? insertedDisplayIDs : []
             applyStateChanges()
-        } else if shouldAnimateInsertion {
-            animatedAppearanceMessageIDs = []
-            withAnimation(.spring(response: 0.24, dampingFraction: 0.88)) {
-                applyStateChanges()
-            }
         } else {
             animatedAppearanceMessageIDs = []
             applyStateChanges()
@@ -743,10 +870,9 @@ struct SessionChatView: View {
             animatedAppearanceMessageIDs = hasCompletedInitialScroll ? [pendingMessage.id] : []
             pendingUserMessages.append(pendingMessage)
         } else {
+            newMessageCount += 1
             animatedAppearanceMessageIDs = []
-            withAnimation(.spring(response: 0.24, dampingFraction: 0.88)) {
-                pendingUserMessages.append(pendingMessage)
-            }
+            pendingUserMessages.append(pendingMessage)
         }
         messageInput = ""
         Task { @MainActor in
@@ -757,12 +883,6 @@ struct SessionChatView: View {
         Task.detached {
             await MessageSender.send(text, to: session)
         }
-    }
-
-    private func shouldAnimateMessageInsertion(from old: [DisplayedChatMessage], to new: [DisplayedChatMessage]) -> Bool {
-        guard !old.isEmpty else { return false }
-        let oldIds = Set(old.map(\.id))
-        return new.contains { !oldIds.contains($0.id) }
     }
 
     // MARK: - Helpers
@@ -800,6 +920,13 @@ final class SessionChatScrollController: ObservableObject {
         scrollView?.documentView?.bounds.height
     }
 
+    var isAtBottom: Bool {
+        guard let scrollView else { return false }
+        let visibleMaxY = scrollView.contentView.documentVisibleRect.maxY
+        let documentMaxY = scrollView.documentView?.bounds.maxY ?? 0
+        return visibleMaxY >= documentMaxY - 1
+    }
+
     func attach(_ scrollView: NSScrollView) {
         self.scrollView = scrollView
     }
@@ -831,6 +958,95 @@ final class SessionChatScrollController: ObservableObject {
         clipView.scroll(to: origin)
         scrollView.reflectScrolledClipView(clipView)
         return true
+    }
+}
+
+private struct ScrollViewLiveScrollObserver: NSViewRepresentable {
+    let onScroll: (Bool) -> Void
+    var onResolveScrollView: ((NSScrollView) -> Void)? = nil
+
+    func makeNSView(context: Context) -> ScrollObserverView {
+        let view = ScrollObserverView()
+        view.onScroll = onScroll
+        view.onResolveScrollView = onResolveScrollView
+        return view
+    }
+
+    func updateNSView(_ nsView: ScrollObserverView, context: Context) {
+        nsView.onScroll = onScroll
+        nsView.onResolveScrollView = onResolveScrollView
+        nsView.attachIfNeeded()
+    }
+}
+
+private final class ScrollObserverView: NSView {
+    var onScroll: ((Bool) -> Void)?
+    var onResolveScrollView: ((NSScrollView) -> Void)?
+
+    private weak var observedScrollView: NSScrollView?
+    private var boundsObserver: NSObjectProtocol?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        attachIfNeeded()
+    }
+
+    override func viewWillMove(toSuperview newSuperview: NSView?) {
+        if newSuperview == nil {
+            detach()
+        }
+        super.viewWillMove(toSuperview: newSuperview)
+    }
+
+    deinit {
+        detach()
+    }
+
+    func attachIfNeeded() {
+        guard let scrollView = enclosingScrollView ?? findEnclosingScrollView() else { return }
+        guard observedScrollView !== scrollView else {
+            notifyScrollPosition()
+            return
+        }
+
+        detach()
+        observedScrollView = scrollView
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        boundsObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView,
+            queue: .main
+        ) { [weak self] _ in
+            self?.notifyScrollPosition()
+        }
+        onResolveScrollView?(scrollView)
+        notifyScrollPosition()
+    }
+
+    private func detach() {
+        if let boundsObserver {
+            NotificationCenter.default.removeObserver(boundsObserver)
+        }
+        boundsObserver = nil
+        observedScrollView = nil
+    }
+
+    private func findEnclosingScrollView() -> NSScrollView? {
+        var view = superview
+        while let current = view {
+            if let scrollView = current as? NSScrollView {
+                return scrollView
+            }
+            view = current.superview
+        }
+        return nil
+    }
+
+    private func notifyScrollPosition() {
+        guard let scrollView = observedScrollView else { return }
+        let visibleMaxY = scrollView.contentView.documentVisibleRect.maxY
+        let documentMaxY = scrollView.documentView?.bounds.maxY ?? 0
+        onScroll?(visibleMaxY >= documentMaxY - 24)
     }
 }
 
@@ -937,78 +1153,6 @@ enum SessionChatDisplayReconciler {
 
     private static func normalizedUserText(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-}
-
-private struct ScrollViewLiveScrollObserver: NSViewRepresentable {
-    var onScroll: (Bool) -> Void
-    var onResolveScrollView: ((NSScrollView) -> Void)? = nil
-
-    func makeNSView(context: Context) -> ScrollObserverView {
-        let view = ScrollObserverView()
-        view.onScroll = onScroll
-        view.onResolveScrollView = onResolveScrollView
-        return view
-    }
-
-    func updateNSView(_ nsView: ScrollObserverView, context: Context) {
-        nsView.onScroll = onScroll
-        nsView.onResolveScrollView = onResolveScrollView
-        nsView.attachIfNeeded()
-    }
-}
-
-final class ScrollObserverView: NSView {
-    var onScroll: ((Bool) -> Void)?
-    var onResolveScrollView: ((NSScrollView) -> Void)?
-    private weak var observedScrollView: NSScrollView?
-    private var notificationToken: NSObjectProtocol?
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        attachIfNeeded()
-    }
-
-    func attachIfNeeded() {
-        guard let scrollView = enclosingScrollView ?? findEnclosingScrollView(), scrollView !== observedScrollView else {
-            return
-        }
-
-        if let notificationToken {
-            NotificationCenter.default.removeObserver(notificationToken)
-        }
-
-        observedScrollView = scrollView
-        onResolveScrollView?(scrollView)
-        scrollView.contentView.postsBoundsChangedNotifications = true
-        notificationToken = NotificationCenter.default.addObserver(
-            forName: NSView.boundsDidChangeNotification,
-            object: scrollView.contentView,
-            queue: .main
-        ) { [weak self, weak scrollView] _ in
-            guard let self, let scrollView else { return }
-            let visibleMaxY = scrollView.contentView.documentVisibleRect.maxY
-            let documentMaxY = scrollView.documentView?.bounds.maxY ?? 0
-            let atBottom = visibleMaxY >= documentMaxY - 24
-            self.onScroll?(atBottom)
-        }
-    }
-
-    private func findEnclosingScrollView() -> NSScrollView? {
-        var view = superview
-        while let current = view {
-            if let scrollView = current as? NSScrollView {
-                return scrollView
-            }
-            view = current.superview
-        }
-        return nil
-    }
-
-    deinit {
-        if let notificationToken {
-            NotificationCenter.default.removeObserver(notificationToken)
-        }
     }
 }
 

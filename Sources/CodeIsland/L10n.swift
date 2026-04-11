@@ -231,6 +231,7 @@ final class L10n: ObservableObject {
         "chat_loading": "Loading messages…",
         "chat_empty": "No messages yet",
         "chat_placeholder": "Message Claude…",
+        "chat_new_messages_count": "%d new messages",
     ]
 
     private static let zh: [String: String] = [
@@ -433,5 +434,6 @@ final class L10n: ObservableObject {
         "chat_loading": "加载消息中…",
         "chat_empty": "暂无消息",
         "chat_placeholder": "发送消息给 Claude…",
+        "chat_new_messages_count": "%d 条新消息",
     ]
 }
