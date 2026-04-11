@@ -31,7 +31,11 @@ enum CodexSessionReader {
         }
 
         guard let cwd else { return nil }
-        return findRecentSession(base: "\(home)/.codex/sessions", cwd: cwd, after: processStart)
+        return bestMatchingSessionPath(
+            base: "\(home)/.codex/sessions",
+            cwd: cwd,
+            after: processStart
+        )
     }
 
     static func readMessages(at path: String) -> [SessionChatMessage] {
@@ -199,8 +203,30 @@ enum CodexSessionReader {
         return Date()
     }
 
-    private static func findRecentSession(base: String, cwd: String, after: Date?) -> String? {
-        let fm = FileManager.default
+    static func bestMatchingSessionPath(
+        base: String,
+        cwd: String,
+        after: Date?,
+        fileManager fm: FileManager = .default
+    ) -> String? {
+        if let path = findRecentSession(base: base, cwd: cwd, after: after, fileManager: fm) {
+            return path
+        }
+
+        // After an app relaunch we may only have a restored session snapshot. If the
+        // transcript hasn't been touched since before the current process start time, the
+        // strict time filter can miss the correct file and the history panel appears empty
+        // until the next message rewrites the transcript. Fall back to a cwd-only lookup.
+        guard after != nil else { return nil }
+        return findRecentSession(base: base, cwd: cwd, after: nil, fileManager: fm)
+    }
+
+    private static func findRecentSession(
+        base: String,
+        cwd: String,
+        after: Date?,
+        fileManager fm: FileManager
+    ) -> String? {
         let calendar = Calendar.current
         let now = Date()
 

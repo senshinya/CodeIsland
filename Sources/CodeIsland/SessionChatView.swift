@@ -639,6 +639,12 @@ struct SessionChatView: View {
     // MARK: - Actions
 
     private var effectiveTranscriptPath: String? {
+        if let path = session.transcriptPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !path.isEmpty,
+           FileManager.default.fileExists(atPath: path) {
+            return path
+        }
+
         switch session.source {
         case "claude":
             return ClaudeSessionReader.jsonlPath(sessionId: preferredTranscriptSessionId, cwd: session.cwd)

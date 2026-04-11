@@ -35,9 +35,10 @@ final class SessionPersistenceTests: XCTestCase {
         XCTAssertEqual(session.sessionId, "session-1")
         XCTAssertEqual(session.cliPid, 123)
         XCTAssertNil(session.cliStartTime)
+        XCTAssertNil(session.transcriptPath)
     }
 
-    func testPersistedSessionRoundTripPreservesCliStartTime() throws {
+    func testPersistedSessionRoundTripPreservesCliStartTimeAndTranscriptPath() throws {
         let startTime = ISO8601DateFormatter().date(from: "2026-04-09T10:00:00Z")!
         let cliStartTime = ISO8601DateFormatter().date(from: "2026-04-09T10:00:05Z")!
         let session = PersistedSession(
@@ -48,6 +49,7 @@ final class SessionPersistenceTests: XCTestCase {
             sessionTitle: "Demo",
             sessionTitleSource: nil,
             providerSessionId: "provider-2",
+            transcriptPath: "/tmp/demo/rollout.jsonl",
             lastUserPrompt: "ping",
             lastAssistantMessage: "pong",
             termApp: "iTerm.app",
@@ -74,5 +76,6 @@ final class SessionPersistenceTests: XCTestCase {
 
         XCTAssertEqual(decoded.cliPid, 456)
         XCTAssertEqual(decoded.cliStartTime, cliStartTime)
+        XCTAssertEqual(decoded.transcriptPath, "/tmp/demo/rollout.jsonl")
     }
 }

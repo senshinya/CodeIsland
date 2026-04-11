@@ -23,12 +23,32 @@ private struct BlurFadeModifier: ViewModifier {
     }
 }
 
+private struct LiftFadeModifier: ViewModifier {
+    let yOffset: CGFloat
+    let opacity: Double
+
+    func body(content: Content) -> some View {
+        content
+            .compositingGroup()
+            .offset(y: yOffset)
+            .opacity(opacity)
+    }
+}
+
 extension AnyTransition {
     /// Blur out + fade — smoother than plain opacity for notch content switches.
     static var blurFade: AnyTransition {
         .modifier(
             active: BlurFadeModifier(active: true),
             identity: BlurFadeModifier(active: false)
+        )
+    }
+
+    /// Short upward lift + fade, used when dismissing the chat panel.
+    static var liftFadeUp: AnyTransition {
+        .modifier(
+            active: LiftFadeModifier(yOffset: -22, opacity: 0),
+            identity: LiftFadeModifier(yOffset: 0, opacity: 1)
         )
     }
 }

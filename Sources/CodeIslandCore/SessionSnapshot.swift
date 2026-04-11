@@ -49,6 +49,7 @@ public struct SessionSnapshot {
     public var sessionTitle: String?
     public var sessionTitleSource: SessionTitleSource?
     public var providerSessionId: String?
+    public var transcriptPath: String?
     /// nil = unchecked, false = not YOLO, true = YOLO
     public var isYoloMode: Bool?
 
@@ -570,6 +571,9 @@ public func extractMetadata(into sessions: inout [String: SessionSnapshot], sess
             let projectName = String(parts[idx + 1])
             sessions[sessionId]?.cwd = "/\(parts[...idx].joined(separator: "/"))/\(projectName)"
         }
+    }
+    if let tp = event.rawJSON["transcript_path"] as? String, !tp.isEmpty {
+        sessions[sessionId]?.transcriptPath = tp
     }
     if let model = event.rawJSON["model"] as? String, !model.isEmpty {
         sessions[sessionId]?.model = model

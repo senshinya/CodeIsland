@@ -9,6 +9,7 @@ struct PersistedSession: Codable {
     let sessionTitle: String?
     let sessionTitleSource: SessionTitleSource?
     let providerSessionId: String?
+    let transcriptPath: String?
     let lastUserPrompt: String?
     let lastAssistantMessage: String?
     let termApp: String?
@@ -39,6 +40,7 @@ enum SessionPersistence {
                 sessionTitle: s.sessionTitle,
                 sessionTitleSource: s.sessionTitleSource,
                 providerSessionId: s.providerSessionId,
+                transcriptPath: resolvedTranscriptPath(sessionId: id, session: s),
                 lastUserPrompt: s.lastUserPrompt,
                 lastAssistantMessage: s.lastAssistantMessage,
                 termApp: s.termApp,
@@ -73,5 +75,28 @@ enum SessionPersistence {
 
     static func clear() {
         try? FileManager.default.removeItem(atPath: filePath)
+    }
+
+    private static func resolvedTranscriptPath(sessionId: String, session: SessionSnapshot) -> String? {
+        if let path = session.transcriptPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !path.isEmpty,
+           FileManager.default.fileExists(atPath: path) {
+            return path
+        }
+
+        guard session.source == "codex" else { return nil }
+        let effectiveSessionId: String
+        if let providerSessionId = session.providerSessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !providerSessionId.isEmpty {
+            effectiveSessionId = providerSessionId
+        } else {
+            effectiveSessionId = sessionId
+        }
+
+        return CodexSessionReader.transcriptPath(
+            sessionId: effectiveSessionId,
+            cwd: session.cwd,
+            processStart: session.cliStartTime
+        )
     }
 }

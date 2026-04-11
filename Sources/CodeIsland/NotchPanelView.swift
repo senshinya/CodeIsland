@@ -179,7 +179,10 @@ struct NotchPanelView: View {
                         if let session = appState.sessions[sid] {
                             SessionChatView(sessionId: sid, session: session, appState: appState)
                                 .id(sid)
-                                .transition(.blurFade.combined(with: .move(edge: .trailing)))
+                                .transition(.asymmetric(
+                                    insertion: .blurFade.combined(with: .move(edge: .trailing)),
+                                    removal: .liftFadeUp
+                                ))
                         }
                     case .collapsed:
                         EmptyView()

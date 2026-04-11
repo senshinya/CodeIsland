@@ -730,6 +730,53 @@ final class AppState {
         return modified >= start.addingTimeInterval(-1) ? providerSessionId : nil
     }
 
+    private func refreshTranscriptPath(for trackedSessionId: String) {
+        guard let session = sessions[trackedSessionId] else { return }
+        let resolved = Self.resolvedTranscriptPath(for: trackedSessionId, session: session)
+        if sessions[trackedSessionId]?.transcriptPath != resolved {
+            sessions[trackedSessionId]?.transcriptPath = resolved
+        }
+    }
+
+    private nonisolated static func resolvedTranscriptPath(
+        for trackedSessionId: String,
+        session: SessionSnapshot
+    ) -> String? {
+        if let path = session.transcriptPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !path.isEmpty,
+           FileManager.default.fileExists(atPath: path) {
+            return path
+        }
+
+        switch session.source {
+        case "claude":
+            let effectiveSessionId: String
+            if let providerSessionId = session.providerSessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !providerSessionId.isEmpty {
+                effectiveSessionId = providerSessionId
+            } else {
+                effectiveSessionId = trackedSessionId
+            }
+            return ClaudeSessionReader.jsonlPath(sessionId: effectiveSessionId, cwd: session.cwd)
+        case "codex":
+            let effectiveSessionId: String
+            if let providerSessionId = session.providerSessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !providerSessionId.isEmpty {
+                effectiveSessionId = providerSessionId
+            } else {
+                effectiveSessionId = trackedSessionId
+            }
+            return codexTranscriptPath(
+                sessionId: effectiveSessionId,
+                cwd: session.cwd,
+                processStart: session.cliStartTime,
+                persistedPath: session.transcriptPath
+            )
+        default:
+            return nil
+        }
+    }
+
     func handleEvent(_ event: HookEvent) {
         // Skip events from subagent worktrees — tracked via parent's SubagentStart/Stop
         if let cwd = event.rawJSON["cwd"] as? String,
@@ -792,6 +839,7 @@ final class AppState {
            SessionTitleStore.supports(provider: provider) {
             refreshProviderTitle(for: sessionId)
         }
+        refreshTranscriptPath(for: sessionId)
 
         // Handle the "else if activeSessionId == sessionId → mostActive" edge case
         // (reducer can't check activeSessionId since it's AppState-local)
@@ -1222,7 +1270,7 @@ final class AppState {
                 reader: readRecentFromCodeBuddyTranscript(path:)
             )
         case "codex":
-            return readModelFromCodexStore(cwd: session.cwd, processStart: processStart)
+            return readModelFromCodexStore(sessionId: sessionId, session: session, processStart: processStart)
         case "gemini":
             return readModelFromGeminiStore(cwd: session.cwd, processStart: processStart)
         case "cursor":
@@ -1248,12 +1296,25 @@ final class AppState {
         return reader(path).0
     }
 
-    private nonisolated static func readModelFromCodexStore(cwd: String?, processStart: Date?) -> String? {
-        guard let cwd else { return nil }
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let base = "\(home)/.codex/sessions"
-        let fm = FileManager.default
-        guard let path = findRecentCodexSession(base: base, cwd: cwd, after: processStart, fm: fm) else {
+    private nonisolated static func readModelFromCodexStore(
+        sessionId: String,
+        session: SessionSnapshot,
+        processStart: Date?
+    ) -> String? {
+        let effectiveSessionId: String
+        if let providerSessionId = session.providerSessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !providerSessionId.isEmpty {
+            effectiveSessionId = providerSessionId
+        } else {
+            effectiveSessionId = sessionId
+        }
+
+        guard let path = codexTranscriptPath(
+            sessionId: effectiveSessionId,
+            cwd: session.cwd,
+            processStart: processStart,
+            persistedPath: session.transcriptPath
+        ) else {
             return nil
         }
         return readRecentFromCodexTranscript(path: path).0
@@ -1276,7 +1337,8 @@ final class AppState {
         guard let transcriptPath = codexTranscriptPath(
             sessionId: effectiveSessionId,
             cwd: session.cwd,
-            processStart: processStart
+            processStart: processStart,
+            persistedPath: session.transcriptPath
         ),
               let tail = readTranscriptTail(path: transcriptPath, maxBytes: 131072) else {
             return nil
@@ -1326,8 +1388,15 @@ final class AppState {
     private nonisolated static func codexTranscriptPath(
         sessionId: String,
         cwd: String?,
-        processStart: Date?
+        processStart: Date?,
+        persistedPath: String? = nil
     ) -> String? {
+        if let path = persistedPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !path.isEmpty,
+           FileManager.default.fileExists(atPath: path) {
+            return path
+        }
+
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let statePath = "\(home)/.codex/state_5.sqlite"
 
@@ -1355,7 +1424,23 @@ final class AppState {
 
         guard let cwd else { return nil }
         let base = "\(home)/.codex/sessions"
-        return findRecentCodexSession(base: base, cwd: cwd, after: processStart, fm: .default)
+        return codexHistoryPath(base: base, cwd: cwd, after: processStart, fm: .default)
+    }
+
+    private nonisolated static func codexHistoryPath(
+        base: String,
+        cwd: String,
+        after: Date?,
+        fm: FileManager
+    ) -> String? {
+        if let path = findRecentCodexSession(base: base, cwd: cwd, after: after, fm: fm) {
+            return path
+        }
+
+        // Keep active-session discovery strict, but when we're already resolving a known
+        // session's transcript/model after app restore, fall back to the latest cwd match.
+        guard after != nil else { return nil }
+        return findRecentCodexSession(base: base, cwd: cwd, after: nil, fm: fm)
     }
 
     private nonisolated static func qoderTranscriptPath(sessionId: String, cwd: String?) -> String? {
@@ -1486,8 +1571,10 @@ final class AppState {
                 trackedSessionId: p.sessionId,
                 session: snapshot
             )
+            snapshot.transcriptPath = p.transcriptPath
             sessions[p.sessionId] = snapshot
             refreshProviderTitle(for: p.sessionId)
+            refreshTranscriptPath(for: p.sessionId)
             // Reattach exit monitoring without changing the restored idle/running snapshot.
             tryMonitorSession(p.sessionId)
         }
@@ -1640,6 +1727,11 @@ final class AppState {
             // has a known-good alive PID that differs from discovery, we trust the existing
             // one for both cliPid and monitor to avoid cross-session contamination.
             if sessions[info.sessionId] != nil {
+                if let transcriptPath = info.transcriptPath,
+                   sessions[info.sessionId]?.transcriptPath != transcriptPath {
+                    sessions[info.sessionId]?.transcriptPath = transcriptPath
+                    didMutate = true
+                }
                 if let pid = info.pid, pid > 0 {
                     let existingPid = sessions[info.sessionId]?.cliPid ?? 0
                     let existingProcess = resolvedSessionProcessIdentity(for: info.sessionId)
@@ -1656,6 +1748,7 @@ final class AppState {
                 }
                 tryMonitorSession(info.sessionId)
                 refreshProviderTitle(for: info.sessionId, providerSessionId: info.sessionId)
+                refreshTranscriptPath(for: info.sessionId)
                 continue
             }
 
@@ -1676,6 +1769,11 @@ final class AppState {
             })?.key
 
             if let existingKey = duplicateKey {
+                if let transcriptPath = info.transcriptPath,
+                   sessions[existingKey]?.transcriptPath != transcriptPath {
+                    sessions[existingKey]?.transcriptPath = transcriptPath
+                    didMutate = true
+                }
                 // Same guard as above: don't let unreliable discovery PID contaminate
                 // an existing session that has a known-good alive PID.
                 if let pid = info.pid, pid > 0 {
@@ -1710,6 +1808,7 @@ final class AppState {
                         }
                     }
                 }
+                refreshTranscriptPath(for: existingKey)
                 continue
             }
 
@@ -1719,6 +1818,7 @@ final class AppState {
             session.ttyPath = info.tty
             session.recentMessages = info.recentMessages
             session.source = info.source
+            session.transcriptPath = info.transcriptPath
             if let pid = info.pid, let process = Self.liveProcessIdentity(for: pid) {
                 session.cliPid = process.pid
                 session.cliStartTime = process.startTime
@@ -1734,6 +1834,7 @@ final class AppState {
             }
             sessions[info.sessionId] = session
             refreshProviderTitle(for: info.sessionId, providerSessionId: info.sessionId)
+            refreshTranscriptPath(for: info.sessionId)
             tryMonitorSession(info.sessionId)
             didMutate = true
         }
@@ -1786,7 +1887,30 @@ final class AppState {
         let pid: pid_t?
         let modifiedAt: Date
         let recentMessages: [ChatMessage]
+        let transcriptPath: String?
         var source: String = "claude"
+
+        init(
+            sessionId: String,
+            cwd: String,
+            tty: String?,
+            model: String?,
+            pid: pid_t?,
+            modifiedAt: Date,
+            recentMessages: [ChatMessage],
+            transcriptPath: String? = nil,
+            source: String = "claude"
+        ) {
+            self.sessionId = sessionId
+            self.cwd = cwd
+            self.tty = tty
+            self.model = model
+            self.pid = pid
+            self.modifiedAt = modifiedAt
+            self.recentMessages = recentMessages
+            self.transcriptPath = transcriptPath
+            self.source = source
+        }
     }
 
     /// Find running `claude` processes, match to transcript files, extract recent messages
@@ -2693,6 +2817,7 @@ final class AppState {
                 pid: pid,
                 modifiedAt: modifiedAt,
                 recentMessages: messages,
+                transcriptPath: bestFile,
                 source: "codex"
             ))
         }
