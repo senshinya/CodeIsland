@@ -49,11 +49,6 @@ struct DiagnosticsExporter {
         let configs: [(source: String, dest: String)] = [
             ("\(home)/.claude/settings.json", "configs/claude-settings.json"),
             ("\(home)/.codex/hooks.json", "configs/codex-hooks.json"),
-            ("\(home)/.gemini/settings.json", "configs/gemini-settings.json"),
-            ("\(home)/.cursor/hooks.json", "configs/cursor-hooks.json"),
-            ("\(home)/.qoder/settings.json", "configs/qoder-settings.json"),
-            ("\(home)/.factory/settings.json", "configs/factory-settings.json"),
-            ("\(home)/.codebuddy/settings.json", "configs/codebuddy-settings.json"),
             ("\(home)/.codeisland/sessions.json", "configs/persisted-sessions.json"),
         ]
         for item in configs {

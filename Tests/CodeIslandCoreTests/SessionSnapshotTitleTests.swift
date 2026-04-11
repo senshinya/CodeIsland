@@ -2,6 +2,10 @@ import XCTest
 @testable import CodeIslandCore
 
 final class SessionSnapshotTitleTests: XCTestCase {
+    func testSupportedSourcesOnlyIncludeClaudeAndCodex() {
+        XCTAssertEqual(SessionSnapshot.supportedSources, ["claude", "codex"])
+    }
+
     func testDisplayTitlePrefersProviderSessionTitle() {
         var snapshot = SessionSnapshot()
         snapshot.sessionTitle = "Investigate icon sizing"

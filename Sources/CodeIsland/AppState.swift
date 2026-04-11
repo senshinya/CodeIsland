@@ -526,13 +526,6 @@ final class AppState {
         switch source {
         case "claude":     return findClaudePids(candidatePids: candidatePids)
         case "codex":      return findCodexPids(candidatePids: candidatePids)
-        case "gemini":     return findGeminiPids(candidatePids: candidatePids)
-        case "cursor":     return findCursorPids(candidatePids: candidatePids)
-        case "copilot":    return findCopilotPids(candidatePids: candidatePids)
-        case "qoder":      return findQoderPids(candidatePids: candidatePids)
-        case "droid":      return findFactoryPids(candidatePids: candidatePids)
-        case "codebuddy":  return findCodeBuddyPids(candidatePids: candidatePids)
-        case "opencode":   return findOpenCodePids(candidatePids: candidatePids)
         default:           return []
         }
     }
@@ -1595,27 +1588,6 @@ final class AppState {
         if ConfigInstaller.isEnabled(source: "codex") {
             discovered.append(contentsOf: findActiveCodexSessions(candidatePids: candidatePids))
         }
-        if ConfigInstaller.isEnabled(source: "gemini") {
-            discovered.append(contentsOf: findActiveGeminiSessions(candidatePids: candidatePids))
-        }
-        if ConfigInstaller.isEnabled(source: "qoder") {
-            discovered.append(contentsOf: findActiveQoderSessions(candidatePids: candidatePids))
-        }
-        if ConfigInstaller.isEnabled(source: "codebuddy") {
-            discovered.append(contentsOf: findActiveCodeBuddySessions(candidatePids: candidatePids))
-        }
-        if ConfigInstaller.isEnabled(source: "droid") {
-            discovered.append(contentsOf: findActiveFactorySessions(candidatePids: candidatePids))
-        }
-        if ConfigInstaller.isEnabled(source: "cursor") {
-            discovered.append(contentsOf: findActiveCursorSessions(candidatePids: candidatePids))
-        }
-        if ConfigInstaller.isEnabled(source: "copilot") {
-            discovered.append(contentsOf: findActiveCopilotSessions(candidatePids: candidatePids))
-        }
-        if ConfigInstaller.isEnabled(source: "opencode") {
-            discovered.append(contentsOf: findActiveOpenCodeSessions(candidatePids: candidatePids))
-        }
         return discovered
     }
 
@@ -1624,13 +1596,6 @@ final class AppState {
         let candidates: [(String, String)] = [
             ("claude", "\(home)/.claude/projects"),
             ("codex", "\(home)/.codex/sessions"),
-            ("gemini", "\(home)/.gemini/tmp"),
-            ("qoder", "\(home)/.qoder/projects"),
-            ("codebuddy", "\(home)/.codebuddy/projects"),
-            ("droid", "\(home)/.factory/sessions"),
-            ("cursor", "\(home)/.cursor/projects"),
-            ("copilot", "\(home)/.copilot/session-state"),
-            ("opencode", "\(home)/.local/share/opencode"),
         ]
         let fm = FileManager.default
         return candidates.compactMap { source, path in

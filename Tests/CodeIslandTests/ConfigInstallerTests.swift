@@ -2,6 +2,10 @@ import XCTest
 @testable import CodeIsland
 
 final class ConfigInstallerTests: XCTestCase {
+    func testAllCLIsOnlyExposeClaudeAndCodex() {
+        XCTAssertEqual(ConfigInstaller.allCLIs.map(\.source), ["claude", "codex"])
+    }
+
     func testRemoveManagedHookEntriesAlsoPrunesLegacyVibeIslandHooks() throws {
         let hooks: [String: Any] = [
             "SessionEnd": [

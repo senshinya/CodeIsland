@@ -88,115 +88,16 @@ struct ConfigInstaller {
                 ("Stop", 5, false),
             ]
         ),
-        // Gemini CLI — timeout in milliseconds
-        CLIConfig(
-            name: "Gemini", source: "gemini",
-            configPath: ".gemini/settings.json", configKey: "hooks",
-            format: .nested,
-            events: [
-                ("SessionStart", 5000, false),
-                ("SessionEnd", 5000, false),
-                ("BeforeTool", 5000, false),
-                ("AfterTool", 5000, false),
-                ("BeforeAgent", 5000, false),
-                ("AfterAgent", 5000, false),
-            ]
-        ),
-        // Cursor
-        CLIConfig(
-            name: "Cursor", source: "cursor",
-            configPath: ".cursor/hooks.json", configKey: "hooks",
-            format: .flat,
-            events: [
-                ("beforeSubmitPrompt", 5, false),
-                ("beforeShellExecution", 5, false),
-                ("afterShellExecution", 5, false),
-                ("beforeReadFile", 5, false),
-                ("afterFileEdit", 5, false),
-                ("beforeMCPExecution", 5, false),
-                ("afterMCPExecution", 5, false),
-                ("afterAgentThought", 5, false),
-                ("afterAgentResponse", 5, false),
-                ("stop", 5, false),
-            ]
-        ),
-        // Qoder — Claude Code fork
-        CLIConfig(
-            name: "Qoder", source: "qoder",
-            configPath: ".qoder/settings.json", configKey: "hooks",
-            format: .claude,
-            events: [
-                ("UserPromptSubmit", 5, true),
-                ("PreToolUse", 5, false),
-                ("PostToolUse", 5, true),
-                ("SessionStart", 5, false),
-                ("SessionEnd", 5, true),
-                ("Stop", 5, true),
-                ("SubagentStart", 5, true),
-                ("SubagentStop", 5, true),
-                ("Notification", 86400, false),
-                ("PreCompact", 5, true),
-            ]
-        ),
-        // Factory — Claude Code fork (uses "droid" as source identifier)
-        CLIConfig(
-            name: "Factory", source: "droid",
-            configPath: ".factory/settings.json", configKey: "hooks",
-            format: .claude,
-            events: [
-                ("UserPromptSubmit", 5, true),
-                ("PreToolUse", 5, false),
-                ("PostToolUse", 5, true),
-                ("SessionStart", 5, false),
-                ("SessionEnd", 5, true),
-                ("Stop", 5, true),
-                ("SubagentStart", 5, true),
-                ("SubagentStop", 5, true),
-                ("Notification", 86400, false),
-                ("PreCompact", 5, true),
-            ]
-        ),
-        // CodeBuddy — Claude Code fork
-        CLIConfig(
-            name: "CodeBuddy", source: "codebuddy",
-            configPath: ".codebuddy/settings.json", configKey: "hooks",
-            format: .claude,
-            events: [
-                ("UserPromptSubmit", 5, true),
-                ("PreToolUse", 5, false),
-                ("PostToolUse", 5, true),
-                ("SessionStart", 5, false),
-                ("SessionEnd", 5, true),
-                ("Stop", 5, true),
-                ("SubagentStart", 5, true),
-                ("SubagentStop", 5, true),
-                ("Notification", 86400, false),
-                ("PreCompact", 5, true),
-            ]
-        ),
-        // GitHub Copilot CLI
-        CLIConfig(
-            name: "Copilot", source: "copilot",
-            configPath: ".copilot/hooks/codeisland.json", configKey: "hooks",
-            format: .copilot,
-            events: [
-                ("sessionStart", 5, false),
-                ("sessionEnd", 5, true),
-                ("userPromptSubmitted", 5, false),
-                ("preToolUse", 5, false),
-                ("postToolUse", 5, true),
-                ("errorOccurred", 5, true),
-            ]
-        ),
     ]
-
-    /// Non-Claude CLIs (installed via bridge binary directly)
-    private static var externalCLIs: [CLIConfig] {
-        allCLIs.filter { $0.source != "claude" }
-    }
 
     /// Hook script version — bump this when the script template changes
     private static let hookScriptVersion = 4
+
+    // Legacy plugin paths kept so old helper methods still compile even though
+    // OpenCode is no longer offered as a supported integration.
+    private static let opencodePluginDir = NSHomeDirectory() + "/.config/opencode/plugins"
+    private static let opencodePluginPath = NSHomeDirectory() + "/.config/opencode/plugins/codeisland.js"
+    private static let opencodeConfigPath = NSHomeDirectory() + "/.config/opencode/config.json"
 
     /// Hook script for Claude Code (dispatcher: bridge binary → nc fallback)
     private static let hookScript = """
@@ -219,12 +120,6 @@ struct ConfigInstaller {
           echo "$PATCHED" | nc -U -w 2 "$SOCK" 2>/dev/null || true
         fi
         """
-
-    // MARK: - OpenCode plugin paths
-
-    private static let opencodePluginDir = NSHomeDirectory() + "/.config/opencode/plugins"
-    private static let opencodePluginPath = NSHomeDirectory() + "/.config/opencode/plugins/codeisland.js"
-    private static let opencodeConfigPath = NSHomeDirectory() + "/.config/opencode/config.json"
 
     // MARK: - Install / Uninstall
 
@@ -256,11 +151,6 @@ struct ConfigInstaller {
             enableCodexHooksConfig(fm: fm)
         }
 
-        // Install OpenCode plugin
-        if isEnabled(source: "opencode") {
-            if !installOpencodePlugin(fm: fm) { ok = false }
-        }
-
         return ok
     }
 
@@ -272,8 +162,6 @@ struct ConfigInstaller {
         for cli in allCLIs {
             uninstallHooks(cli: cli, fm: fm)
         }
-
-        uninstallOpencodePlugin(fm: fm)
     }
 
     /// Check if Claude Code hooks are installed
@@ -285,15 +173,12 @@ struct ConfigInstaller {
 
     /// Check if a specific CLI's hooks are installed
     static func isInstalled(source: String) -> Bool {
-        if source == "opencode" { return isOpencodePluginInstalled(fm: FileManager.default) }
         guard let cli = allCLIs.first(where: { $0.source == source }) else { return false }
         return isHooksInstalled(for: cli, fm: FileManager.default)
     }
 
     /// Check if CLI directory exists (tool is installed on this machine)
     static func cliExists(source: String) -> Bool {
-        if source == "opencode" { return FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.config/opencode") }
-        if source == "copilot" { return FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.copilot") }
         guard let cli = allCLIs.first(where: { $0.source == source }) else { return false }
         return FileManager.default.fileExists(atPath: cli.dirPath)
     }
@@ -316,9 +201,6 @@ struct ConfigInstaller {
         if enabled {
             installHookScript(fm: fm)
             installBridgeBinary(fm: fm)
-            if source == "opencode" {
-                return installOpencodePlugin(fm: fm)
-            }
             guard let cli = allCLIs.first(where: { $0.source == source }) else { return false }
             if cli.source == "claude" {
                 return installClaudeHooks(cli: cli, fm: fm)
@@ -328,9 +210,7 @@ struct ConfigInstaller {
                 return isHooksInstalled(for: cli, fm: fm)
             }
         } else {
-            if source == "opencode" {
-                uninstallOpencodePlugin(fm: fm)
-            } else if let cli = allCLIs.first(where: { $0.source == source }) {
+            if let cli = allCLIs.first(where: { $0.source == source }) {
                 uninstallHooks(cli: cli, fm: fm)
             }
             return true
@@ -347,9 +227,7 @@ struct ConfigInstaller {
         var repaired: [String] = []
         for cli in allCLIs {
             guard isEnabled(source: cli.source) else { continue }
-            let dirExists = cli.format == .copilot
-                ? fm.fileExists(atPath: NSHomeDirectory() + "/.copilot")
-                : fm.fileExists(atPath: cli.dirPath)
+            let dirExists = fm.fileExists(atPath: cli.dirPath)
             guard dirExists else { continue }
             if isHooksInstalled(for: cli, fm: fm) { continue }
             if cli.source == "claude" {
@@ -368,12 +246,6 @@ struct ConfigInstaller {
         if isEnabled(source: "codex"),
            fm.fileExists(atPath: NSHomeDirectory() + "/.codex") {
             enableCodexHooksConfig(fm: fm)
-        }
-        // OpenCode plugin
-        if isEnabled(source: "opencode"),
-           fm.fileExists(atPath: (opencodeConfigPath as NSString).deletingLastPathComponent),
-           !isOpencodePluginInstalled(fm: fm) {
-            if installOpencodePlugin(fm: fm) { repaired.append("OpenCode") }
         }
         return repaired
     }

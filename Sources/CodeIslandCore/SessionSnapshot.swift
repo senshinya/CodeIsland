@@ -10,13 +10,6 @@ public struct SessionSnapshot {
     public static let supportedSources: Set<String> = [
         "claude",
         "codex",
-        "gemini",
-        "cursor",
-        "copilot",
-        "qoder",
-        "droid",
-        "codebuddy",
-        "opencode",
     ]
 
     public var status: AgentStatus = .idle
@@ -148,12 +141,6 @@ public struct SessionSnapshot {
         switch source {
         case "claude": return "Claude"
         case "codex": return "Codex"
-        case "gemini": return "Gemini"
-        case "cursor": return "Cursor"
-        case "qoder": return "Qoder"
-        case "droid": return "Factory"
-        case "codebuddy": return "CodeBuddy"
-        case "opencode": return "OpenCode"
         default: return source.capitalized
         }
     }

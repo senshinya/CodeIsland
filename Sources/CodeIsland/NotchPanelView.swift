@@ -1297,13 +1297,6 @@ private struct SessionListView: View {
             let cliOrder: [(source: String, name: String)] = [
                 ("claude", "Claude"),
                 ("codex", "Codex"),
-                ("gemini", "Gemini"),
-                ("cursor", "Cursor"),
-                ("copilot", "Copilot"),
-                ("qoder", "Qoder"),
-                ("droid", "Factory"),
-                ("codebuddy", "CodeBuddy"),
-                ("opencode", "OpenCode"),
             ]
             var result: [(String, String?, [String])] = []
             var seen = Set<String>()
@@ -1958,12 +1951,7 @@ private struct TerminalBadge: View {
     let session: SessionSnapshot
 
     private static let sourceBundleIds: [String: String] = [
-        "cursor": "com.todesktop.230313mzl4w4u92",
-        "qoder": "com.qoder.ide",
-        "droid": "com.factory.app",
-        "codebuddy": "com.tencent.codebuddy",
         "codex": "com.openai.codex",
-        "opencode": "ai.opencode.desktop",
     ]
     private static var termIconCache: [String: NSImage] = [:]
 
@@ -2088,13 +2076,6 @@ private struct Line: Shape {
 private let cliIconFiles: [String: String] = [
     "claude": "claude",
     "codex": "codex",
-    "gemini": "gemini",
-    "cursor": "cursor",
-    "copilot": "copilot",
-    "qoder": "qoder",
-    "droid": "factory",
-    "codebuddy": "codebuddy",
-    "opencode": "opencode",
 ]
 
 private var cliIconCache: [String: NSImage] = [:]
