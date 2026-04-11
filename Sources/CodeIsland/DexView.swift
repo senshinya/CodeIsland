@@ -1,27 +1,29 @@
 import SwiftUI
 import CodeIslandCore
 
-/// Dex — Codex mascot, pixel-art cloud with terminal prompt face.
-/// Inspired by Codex's cloud icon with `>_` symbol. OpenAI black & white style.
+/// Dex — Codex mascot, redrawn to match the Codex cloud logo more closely.
+/// Uses a soft blue cloud silhouette with a white `>_` prompt and lightweight status animation.
 struct DexView: View {
     let status: AgentStatus
     var size: CGFloat = 27
     @State private var alive = false
     @Environment(\.mascotSpeed) private var speed
 
-    // OpenAI black & white palette — white body, black prompt
-    private static let cloudC    = Color(red: 0.92, green: 0.92, blue: 0.93) // off-white
-    private static let cloudDark = Color(red: 0.70, green: 0.70, blue: 0.72) // legs
-    private static let promptC   = Color.black
-    private static let alertC    = Color(red: 1.0, green: 0.55, blue: 0.0)   // amber warning
-    private static let kbBase    = Color(red: 0.18, green: 0.18, blue: 0.20)
-    private static let kbKey     = Color(red: 0.40, green: 0.40, blue: 0.42)
-    private static let kbHi      = Color.white
+    private static let cloudTop = Color(red: 0.67, green: 0.70, blue: 1.00)
+    private static let cloudMid = Color(red: 0.49, green: 0.57, blue: 0.99)
+    private static let cloudBottom = Color(red: 0.23, green: 0.31, blue: 0.96)
+    private static let cloudGlow = Color.white.opacity(0.24)
+    private static let promptC = Color.white
+    private static let promptDim = Color.white.opacity(0.35)
+    private static let alertC = Color(red: 1.0, green: 0.72, blue: 0.18)
+    private static let kbBase = Color(red: 0.18, green: 0.20, blue: 0.26)
+    private static let kbKey = Color(red: 0.35, green: 0.39, blue: 0.49)
+    private static let kbHi = Color.white
 
     var body: some View {
         ZStack {
             switch status {
-            case .idle:                 sleepScene
+            case .idle: sleepScene
             case .processing, .running: workScene
             case .waitingApproval, .waitingQuestion: alertScene
             }
@@ -35,113 +37,146 @@ struct DexView: View {
         }
     }
 
-    // ── Coordinate helper ──
     private struct V {
-        let ox: CGFloat, oy: CGFloat, s: CGFloat
+        let ox: CGFloat
+        let oy: CGFloat
+        let s: CGFloat
         let y0: CGFloat
 
-        init(_ sz: CGSize, svgW: CGFloat = 15, svgH: CGFloat = 10, svgY0: CGFloat = 6) {
+        init(_ sz: CGSize, svgW: CGFloat = 16, svgH: CGFloat = 16, svgY0: CGFloat = 0) {
             s = min(sz.width / svgW, sz.height / svgH)
             ox = (sz.width - svgW * s) / 2
             oy = (sz.height - svgH * s) / 2
             y0 = svgY0
         }
-        func r(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, dy: CGFloat = 0) -> CGRect {
-            CGRect(x: ox + x * s, y: oy + (y - y0 + dy) * s, width: w * s, height: h * s)
+
+        func r(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> CGRect {
+            CGRect(x: ox + x * s, y: oy + (y - y0) * s, width: w * s, height: h * s)
+        }
+
+        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: ox + x * s, y: oy + (y - y0) * s)
         }
     }
 
-    // Interpolate between keyframes
     private func lerp(_ keyframes: [(CGFloat, CGFloat)], at pct: CGFloat) -> CGFloat {
         guard let first = keyframes.first else { return 0 }
         if pct <= first.0 { return first.1 }
         for i in 1..<keyframes.count {
             if pct <= keyframes[i].0 {
-                let t = (pct - keyframes[i-1].0) / (keyframes[i].0 - keyframes[i-1].0)
-                return keyframes[i-1].1 + (keyframes[i].1 - keyframes[i-1].1) * t
+                let t = (pct - keyframes[i - 1].0) / (keyframes[i].0 - keyframes[i - 1].0)
+                return keyframes[i - 1].1 + (keyframes[i].1 - keyframes[i - 1].1) * t
             }
         }
         return keyframes.last?.1 ?? 0
     }
 
-    // ── Cloud body: a pixel-art blob shape ──
-    // Rounded cloud made of overlapping rects (8-bit style)
-    private func drawCloud(_ c: GraphicsContext, v: V, dy: CGFloat,
-                           squashX: CGFloat = 1, squashY: CGFloat = 1) {
-        let cc = Self.cloudC
-
-        // Center offset for squash
-        let cx: CGFloat = 7.5
-        func sx(_ x: CGFloat, w: CGFloat) -> (CGFloat, CGFloat) {
-            let nx = cx + (x - cx) * squashX
-            return (nx, w * squashX)
-        }
-
-        // Cloud body — flat black, pixel blob shape
-        let rows: [(y: CGFloat, x: CGFloat, w: CGFloat)] = [
-            (14, 4, 7),       // bottom
-            (13, 3, 9),
-            (12, 2, 11),
-            (11, 1, 13),      // widest
-            (10, 1, 13),
-            (9,  1, 13),
-            (8,  2, 11),
-            (7,  2, 11),
-            // Top bumps (cloud silhouette)
-            (6,  3, 3),       // left bump
-            (6,  6, 3),       // center bump
-            (6,  9, 3),       // right bump
-            (5,  4, 2),       // left bump top
-            (5,  6.5, 2),     // center bump top
-            (5,  9, 2),       // right bump top
-        ]
-
-        for row in rows {
-            let (adjX, adjW) = sx(row.x, w: row.w)
-            let adjH: CGFloat = 1 * squashY
-            c.fill(Path(v.r(adjX, row.y * squashY + (1 - squashY) * 10, adjW, adjH, dy: dy)),
-                   with: .color(cc))
-        }
+    private func transformedRect(
+        _ v: V,
+        x: CGFloat,
+        y: CGFloat,
+        w: CGFloat,
+        h: CGFloat,
+        dy: CGFloat,
+        squashX: CGFloat = 1,
+        squashY: CGFloat = 1,
+        centerX: CGFloat = 8,
+        centerY: CGFloat = 8.5
+    ) -> CGRect {
+        let nx = centerX + (x - centerX) * squashX
+        let ny = centerY + (y - centerY) * squashY + dy
+        return v.r(nx, ny, w * squashX, h * squashY)
     }
 
-    // ── Draw `>_` terminal prompt as face ──
-    private func drawPrompt(_ c: GraphicsContext, v: V, dy: CGFloat,
-                            color: Color = Self.promptC, cursorOn: Bool = true) {
-        // `>` chevron — pixel art
-        c.fill(Path(v.r(3, 10, 1, 1, dy: dy)), with: .color(color))
-        c.fill(Path(v.r(4, 11, 1, 1, dy: dy)), with: .color(color))
-        c.fill(Path(v.r(3, 12, 1, 1, dy: dy)), with: .color(color))
+    private func cloudPath(_ v: V, dy: CGFloat, squashX: CGFloat = 1, squashY: CGFloat = 1) -> Path {
+        var path = Path()
+        path.addRoundedRect(
+            in: transformedRect(v, x: 3.3, y: 8.0, w: 9.4, h: 4.7, dy: dy, squashX: squashX, squashY: squashY),
+            cornerSize: CGSize(width: 2.9 * v.s, height: 2.9 * v.s)
+        )
+        path.addEllipse(in: transformedRect(v, x: 1.2, y: 6.1, w: 5.0, h: 5.2, dy: dy, squashX: squashX, squashY: squashY))
+        path.addEllipse(in: transformedRect(v, x: 3.15, y: 3.45, w: 4.8, h: 4.8, dy: dy, squashX: squashX, squashY: squashY))
+        path.addEllipse(in: transformedRect(v, x: 5.95, y: 2.45, w: 4.1, h: 4.1, dy: dy, squashX: squashX, squashY: squashY))
+        path.addEllipse(in: transformedRect(v, x: 8.05, y: 3.45, w: 4.8, h: 4.8, dy: dy, squashX: squashX, squashY: squashY))
+        path.addEllipse(in: transformedRect(v, x: 9.8, y: 6.1, w: 5.0, h: 5.2, dy: dy, squashX: squashX, squashY: squashY))
+        path.addEllipse(in: transformedRect(v, x: 4.25, y: 7.3, w: 7.5, h: 5.1, dy: dy, squashX: squashX, squashY: squashY))
+        path.addEllipse(in: transformedRect(v, x: 3.9, y: 5.2, w: 8.2, h: 6.2, dy: dy, squashX: squashX, squashY: squashY))
+        return path
+    }
 
-        // `_` cursor
+    private func drawCloud(_ c: GraphicsContext, v: V, dy: CGFloat, squashX: CGFloat = 1, squashY: CGFloat = 1) {
+        let path = cloudPath(v, dy: dy, squashX: squashX, squashY: squashY)
+        let top = v.p(7.5, 2.5 + dy)
+        let bottom = v.p(8.2, 13.8 + dy)
+        c.fill(
+            path,
+            with: .linearGradient(
+                Gradient(colors: [Self.cloudTop, Self.cloudMid, Self.cloudBottom]),
+                startPoint: top,
+                endPoint: bottom
+            )
+        )
+
+        let highlight = Path(ellipseIn: transformedRect(v, x: 4.95, y: 4.15, w: 4.2, h: 2.0, dy: dy, squashX: squashX, squashY: squashY))
+        c.fill(highlight, with: .color(Self.cloudGlow))
+    }
+
+    private func drawPrompt(
+        _ c: GraphicsContext,
+        v: V,
+        dy: CGFloat,
+        color: Color,
+        cursorOn: Bool,
+        promptOpacity: Double = 1
+    ) {
+        let stroke = StrokeStyle(lineWidth: max(1.2, v.s * 1.15), lineCap: .round, lineJoin: .round)
+
+        var chevron = Path()
+        chevron.move(to: v.p(5.0, 7.5 + dy))
+        chevron.addLine(to: v.p(6.9, 9.2 + dy))
+        chevron.addLine(to: v.p(5.0, 10.9 + dy))
+        c.stroke(chevron, with: .color(color.opacity(promptOpacity)), style: stroke)
+
         if cursorOn {
-            c.fill(Path(v.r(6, 12, 3, 1, dy: dy)), with: .color(color))
+            var cursor = Path()
+            cursor.move(to: v.p(9.0, 10.9 + dy))
+            cursor.addLine(to: v.p(11.9, 10.9 + dy))
+            c.stroke(cursor, with: .color(color.opacity(promptOpacity)), style: stroke)
         }
     }
 
-    // ── Shadow ──
-    private func drawShadow(_ c: GraphicsContext, v: V, width: CGFloat = 9, opacity: Double = 0.3) {
-        c.fill(Path(v.r(7.5 - width / 2, 15, width, 1)),
-               with: .color(.black.opacity(opacity)))
+    private func drawShadow(_ c: GraphicsContext, v: V, width: CGFloat, y: CGFloat = 15.3, opacity: Double) {
+        c.fill(
+            Path(ellipseIn: v.r(8 - width / 2, y, width, 0.95)),
+            with: .color(.black.opacity(opacity))
+        )
     }
 
-    // ── Small legs (pixel stubs under cloud) ──
-    private func drawLegs(_ c: GraphicsContext, v: V) {
-        c.fill(Path(v.r(5, 14.5, 1, 1.5)), with: .color(Self.cloudDark))
-        c.fill(Path(v.r(9, 14.5, 1, 1.5)), with: .color(Self.cloudDark))
+    private func drawKeyboard(_ c: GraphicsContext, v: V, flashIndex: Int?) {
+        c.fill(Path(roundedRect: v.r(0.6, 12.6, 14.8, 2.8), cornerSize: CGSize(width: 1.1 * v.s, height: 1.1 * v.s)), with: .color(Self.kbBase))
+
+        for row in 0..<2 {
+            for col in 0..<5 {
+                let keyRect = v.r(1.5 + CGFloat(col) * 2.5, 13.0 + CGFloat(row) * 0.95, 1.7, 0.45)
+                c.fill(Path(roundedRect: keyRect, cornerSize: CGSize(width: 0.25 * v.s, height: 0.25 * v.s)), with: .color(Self.kbKey))
+            }
+        }
+
+        if let flashIndex {
+            let row = flashIndex / 5
+            let col = flashIndex % 5
+            let flashRect = v.r(1.5 + CGFloat(col) * 2.5, 13.0 + CGFloat(row) * 0.95, 1.7, 0.45)
+            c.fill(Path(roundedRect: flashRect, cornerSize: CGSize(width: 0.25 * v.s, height: 0.25 * v.s)), with: .color(Self.kbHi.opacity(0.95)))
+        }
     }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // SLEEP — floating gently, cursor blinking slow
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     private var sleepScene: some View {
         ZStack {
             TimelineView(.periodic(from: .now, by: 0.06)) { ctx in
-                let t = ctx.date.timeIntervalSinceReferenceDate * speed
-                sleepCanvas(t: t)
+                sleepCanvas(t: ctx.date.timeIntervalSinceReferenceDate * speed)
             }
             TimelineView(.periodic(from: .now, by: 0.05)) { ctx in
-                let t = ctx.date.timeIntervalSinceReferenceDate * speed
-                floatingZs(t: t)
+                floatingZs(t: ctx.date.timeIntervalSinceReferenceDate * speed)
             }
         }
     }
@@ -156,10 +191,11 @@ struct DexView: View {
                 let fontSize = max(6, size * CGFloat(0.18 + phase * 0.10))
                 let baseOpacity = 0.7 - ci * 0.1
                 let opacity = phase < 0.8 ? baseOpacity : (1.0 - phase) * 3.5 * baseOpacity
-                let xOff = size * CGFloat(0.08 + ci * 0.06 + sin(phase * .pi * 2) * 0.03)
-                let yOff = -size * CGFloat(0.15 + phase * 0.38)
+                let xOff = size * CGFloat(0.10 + ci * 0.06 + sin(phase * .pi * 2) * 0.03)
+                let yOff = -size * CGFloat(0.16 + phase * 0.38)
+
                 Text("z")
-                    .font(.system(size: fontSize, weight: .black, design: .monospaced))
+                    .font(.system(size: fontSize, weight: .black, design: .rounded))
                     .foregroundStyle(.white.opacity(opacity))
                     .offset(x: xOff, y: yOff)
             }
@@ -168,84 +204,44 @@ struct DexView: View {
 
     private func sleepCanvas(t: Double) -> some View {
         let phase = t.truncatingRemainder(dividingBy: 4.0) / 4.0
-        let float = sin(phase * .pi * 2) * 0.8  // gentle float
+        let float = sin(phase * .pi * 2) * 0.65
         let cursorPhase = t.truncatingRemainder(dividingBy: 1.2)
-        let cursorOn = cursorPhase < 0.6  // slow blink
+        let cursorOn = cursorPhase < 0.6
 
         return Canvas { c, sz in
-            let v = V(sz, svgW: 15, svgH: 12, svgY0: 4)
-
-            drawShadow(c, v: v, width: 7 + abs(float) * 0.3, opacity: 0.2)
-            drawLegs(c, v: v)
+            let v = V(sz)
+            drawShadow(c, v: v, width: 7.0 + abs(float) * 0.25, opacity: 0.16)
             drawCloud(c, v: v, dy: float)
-            // Sleep: only show dim cursor (no `>` chevron = mouth closed)
-            if cursorOn {
-                c.fill(Path(v.r(6, 12, 3, 1, dy: float)),
-                       with: .color(Self.promptC.opacity(0.3)))
-            }
+            drawPrompt(c, v: v, dy: float, color: Self.promptDim, cursorOn: cursorOn, promptOpacity: 1)
         }
     }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // WORK — bouncing, cursor active, typing on keyboard
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     private var workScene: some View {
         TimelineView(.periodic(from: .now, by: 0.03)) { timeline in
-            let t = timeline.date.timeIntervalSinceReferenceDate * speed
-            workCanvas(t: t)
+            workCanvas(t: timeline.date.timeIntervalSinceReferenceDate * speed)
         }
     }
 
     private func workCanvas(t: Double) -> some View {
-        let bounce = sin(t * 2 * .pi / 0.4) * 1.0
-
-        // Cursor rapid blink
-        let cursorPhase = t.truncatingRemainder(dividingBy: 0.3)
-        let cursorOn = cursorPhase < 0.15
-
-        // Key flash
-        let keyPhase = Int(t / 0.1) % 6
+        let bounce = sin(t * 2 * .pi / 0.42) * 0.95
+        let cursorPhase = t.truncatingRemainder(dividingBy: 0.28)
+        let cursorOn = cursorPhase < 0.14
+        let keyPhase = Int(t / 0.09) % 10
 
         return Canvas { c, sz in
-            let v = V(sz, svgW: 16, svgH: 14, svgY0: 3)
-            let dy = bounce
-
-            // Shadow
-            let shadowW: CGFloat = 8 - abs(dy) * 0.3
-            c.fill(Path(v.r(4 + (8 - shadowW) / 2, 16, shadowW, 1)),
-                   with: .color(.black.opacity(max(0.1, 0.35 - abs(dy) * 0.03))))
-
-            drawLegs(c, v: v)
-
-            // Keyboard
-            c.fill(Path(v.r(0, 13, 15, 3)), with: .color(Self.kbBase))
-            for row in 0..<2 {
-                let ky = 13.5 + CGFloat(row) * 1.2
-                for col in 0..<6 {
-                    let kx = 0.5 + CGFloat(col) * 2.4
-                    c.fill(Path(v.r(kx, ky, 1.8, 0.7)), with: .color(Self.kbKey))
-                }
-            }
-            // Key flash
-            let flashRow = keyPhase / 3
-            let flashCol = keyPhase % 6
-            let fkx = 0.5 + CGFloat(flashCol) * 2.4
-            let fky = 13.5 + CGFloat(flashRow) * 1.2
-            c.fill(Path(v.r(fkx, fky, 1.8, 0.7)), with: .color(Self.kbHi.opacity(0.9)))
-
-            drawCloud(c, v: v, dy: dy)
-            drawPrompt(c, v: v, dy: dy, cursorOn: cursorOn)
+            let v = V(sz)
+            drawShadow(c, v: v, width: 7.6 - abs(bounce) * 0.35, opacity: max(0.12, 0.28 - abs(bounce) * 0.04))
+            drawKeyboard(c, v: v, flashIndex: keyPhase)
+            drawCloud(c, v: v, dy: bounce)
+            drawPrompt(c, v: v, dy: bounce, color: Self.promptC, cursorOn: cursorOn)
         }
     }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // ALERT — shaking, prompt flashing amber
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     private var alertScene: some View {
         ZStack {
             Circle()
-                .fill(Self.alertC.opacity(alive ? 0.12 : 0))
-                .frame(width: size * 0.8)
+                .fill(Self.alertC.opacity(alive ? 0.10 : 0))
+                .frame(width: size * 0.82)
                 .blur(radius: size * 0.05)
                 .animation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true), value: alive)
 
@@ -256,63 +252,39 @@ struct DexView: View {
     }
 
     private func alertCanvas(t: Double) -> some View {
-        let cycle = t.truncatingRemainder(dividingBy: 3.5)
-        let pct = cycle / 3.5
+        let cycle = t.truncatingRemainder(dividingBy: 3.4)
+        let pct = cycle / 3.4
 
         let jumpY = lerp([
-            (0, 0), (0.03, 0), (0.10, -1), (0.15, 1.5),
-            (0.175, -8), (0.20, -8), (0.25, 1.5),
-            (0.275, -6), (0.30, -6), (0.35, 1.0),
-            (0.375, -4), (0.40, -4), (0.45, 0.8),
-            (0.475, -2), (0.50, -2), (0.55, 0.3),
-            (0.62, 0), (1.0, 0),
+            (0, 0), (0.04, 0), (0.10, -1.5), (0.16, 1.5),
+            (0.20, -7), (0.26, 1.2), (0.30, -5.5), (0.36, 0.8),
+            (0.42, -3.5), (0.50, 0.3), (0.62, 0), (1.0, 0),
         ], at: pct)
-
-        let squashX: CGFloat = jumpY > 0.5 ? 1.0 + jumpY * 0.03 : 1.0
-        let squashY: CGFloat = jumpY > 0.5 ? 1.0 - jumpY * 0.02 : 1.0
-
-        // Shake
-        let shakeX: CGFloat = (pct > 0.15 && pct < 0.55) ? sin(pct * 80) * 0.6 : 0
-
-        // Prompt flashing between white and amber
-        let flash = (pct > 0.03 && pct < 0.55) ? sin(pct * 25) * 0.5 + 0.5 : 0.0
+        let squashX: CGFloat = jumpY > 0.5 ? 1.0 + jumpY * 0.025 : 1.0
+        let squashY: CGFloat = jumpY > 0.5 ? 1.0 - jumpY * 0.018 : 1.0
+        let shakeX: CGFloat = (pct > 0.12 && pct < 0.54) ? sin(pct * 90) * 0.55 : 0
+        let flash = (pct > 0.04 && pct < 0.55) ? sin(pct * 26) * 0.5 + 0.5 : 0
         let promptColor = flash > 0.5 ? Self.alertC : Self.promptC
-
-        // ! mark
-        let bangOp = lerp([
-            (0, 0), (0.03, 1), (0.10, 1), (0.55, 1), (0.62, 0), (1.0, 0),
+        let bangOpacity = lerp([
+            (0, 0), (0.04, 1), (0.12, 1), (0.55, 1), (0.64, 0), (1.0, 0),
         ], at: pct)
         let bangScale = lerp([
-            (0, 0.3), (0.03, 1.3), (0.10, 1.0), (0.55, 1.0), (0.62, 0.6), (1.0, 0.6),
+            (0, 0.3), (0.04, 1.25), (0.12, 1.0), (0.55, 1.0), (0.64, 0.6), (1.0, 0.6),
         ], at: pct)
 
         return Canvas { c, sz in
-            let v = V(sz, svgW: 16, svgH: 14, svgY0: 3)
-
-            // Shadow
-            let shadowW: CGFloat = 8 * (1.0 - abs(min(0, jumpY)) * 0.04)
-            let shadowOp = max(0.08, 0.4 - abs(min(0, jumpY)) * 0.04)
-            c.fill(Path(v.r(4 + (8 - shadowW) / 2, 16, shadowW, 1)),
-                   with: .color(.black.opacity(shadowOp)))
-
-            drawLegs(c, v: v)
-
-            // Cloud body with shake offset — draw manually with offset
-            // Since drawCloud doesn't take shakeX, we apply transform
+            let v = V(sz)
+            drawShadow(c, v: v, width: 7.4 * (1.0 - abs(min(0, jumpY)) * 0.03), opacity: max(0.08, 0.30 - abs(min(0, jumpY)) * 0.03))
             c.translateBy(x: shakeX * v.s, y: 0)
             drawCloud(c, v: v, dy: jumpY, squashX: squashX, squashY: squashY)
             drawPrompt(c, v: v, dy: jumpY, color: promptColor, cursorOn: true)
             c.translateBy(x: -shakeX * v.s, y: 0)
 
-            // ! mark
-            if bangOp > 0.01 {
-                let bw: CGFloat = 2 * bangScale
-                let bx: CGFloat = 13
-                let by: CGFloat = 4 + jumpY * 0.15
-                c.fill(Path(v.r(bx, by, bw, 3.5 * bangScale, dy: 0)),
-                       with: .color(Self.alertC.opacity(bangOp)))
-                c.fill(Path(v.r(bx, by + 4.0 * bangScale, bw, 1.5 * bangScale, dy: 0)),
-                       with: .color(Self.alertC.opacity(bangOp)))
+            if bangOpacity > 0.01 {
+                let body = Path(roundedRect: v.r(12.8, 3.6 + jumpY * 0.08, 1.15 * bangScale, 3.8 * bangScale), cornerSize: CGSize(width: 0.55 * v.s, height: 0.55 * v.s))
+                let dot = Path(ellipseIn: v.r(12.85, 8.15 + jumpY * 0.08, 1.05 * bangScale, 1.05 * bangScale))
+                c.fill(body, with: .color(Self.alertC.opacity(bangOpacity)))
+                c.fill(dot, with: .color(Self.alertC.opacity(bangOpacity)))
             }
         }
     }
