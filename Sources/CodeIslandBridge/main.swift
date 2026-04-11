@@ -309,6 +309,13 @@ if !tty.isEmpty {
     json["_tty"] = tty
 }
 
+if let cmuxSurface = env["CMUX_SURFACE_ID"], !cmuxSurface.isEmpty {
+    json["_cmux_surface_id"] = cmuxSurface
+}
+if let cmuxWorkspace = env["CMUX_WORKSPACE_ID"], !cmuxWorkspace.isEmpty {
+    json["_cmux_workspace_id"] = cmuxWorkspace
+}
+
 // Source tag (e.g. "codex" when called via --source codex)
 if let source = sourceTag {
     json["_source"] = source

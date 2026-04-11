@@ -13,8 +13,7 @@ struct NotchPanelView: View {
     @AppStorage(SettingsKey.smartSuppress) private var smartSuppress = SettingsDefaults.smartSuppress
     @AppStorage(SettingsKey.hideWhenNoSession) private var hideWhenNoSession = SettingsDefaults.hideWhenNoSession
     @AppStorage(SettingsKey.showToolStatus) private var showToolStatus = SettingsDefaults.showToolStatus
-    @AppStorage(SettingsKey.showUsageInfo) private var showUsageInfo = SettingsDefaults.showUsageInfo
-    @AppStorage(SettingsKey.showCodexUsageInfo) private var showCodexUsageInfo = SettingsDefaults.showCodexUsageInfo
+    @AppStorage(SettingsKey.expandedUsageDisplay) private var expandedUsageDisplayRaw = SettingsDefaults.expandedUsageDisplay
     @AppStorage(SettingsKey.collapsedWidthOffsetIdle) private var collapsedWidthOffsetIdle = SettingsDefaults.collapsedWidthOffsetIdle
     @AppStorage(SettingsKey.collapsedWidthOffsetWorking) private var collapsedWidthOffsetWorking = SettingsDefaults.collapsedWidthOffsetWorking
     @AppStorage(SettingsKey.collapsedWidthPreview) private var collapsedWidthPreview = ""
@@ -42,6 +41,9 @@ struct NotchPanelView: View {
     }
     private var shouldShowExpanded: Bool {
         showBar && appState.surface.isExpanded
+    }
+    private var expandedUsageDisplay: ExpandedUsageDisplayMode {
+        ExpandedUsageDisplayMode(rawValue: expandedUsageDisplayRaw) ?? SettingsManager.shared.expandedUsageDisplay
     }
 
     /// Mascot size — fits within the menu bar height
@@ -225,12 +227,11 @@ struct NotchPanelView: View {
             }
             .onAppear {
                 displayedToolStatus = showToolStatus
+                SettingsManager.shared.expandedUsageDisplay = expandedUsageDisplay
                 configureUsagePolling()
             }
-            .onChange(of: showUsageInfo) { _, _ in
-                configureUsagePolling()
-            }
-            .onChange(of: showCodexUsageInfo) { _, _ in
+            .onChange(of: expandedUsageDisplayRaw) { _, _ in
+                SettingsManager.shared.expandedUsageDisplay = expandedUsageDisplay
                 configureUsagePolling()
             }
             .onChange(of: appState.surface) { _, surface in
@@ -340,13 +341,14 @@ struct NotchPanelView: View {
     }
 
     private func configureUsagePolling() {
-        if showUsageInfo && !showCodexUsageInfo {
+        switch expandedUsageDisplay {
+        case .claude:
             CodexUsageTracker.shared.stopPolling()
             UsageTracker.shared.startPolling()
-        } else if showCodexUsageInfo && !showUsageInfo {
+        case .codex:
             UsageTracker.shared.stopPolling()
             CodexUsageTracker.shared.startPolling()
-        } else {
+        case .none:
             UsageTracker.shared.stopPolling()
             CodexUsageTracker.shared.stopPolling()
         }
@@ -364,8 +366,7 @@ private struct CompactLeftWing: View {
     let hasNotch: Bool
     let showToolStatus: Bool
     @AppStorage(SettingsKey.sessionGroupingMode) private var groupingMode = SettingsDefaults.sessionGroupingMode
-    @AppStorage(SettingsKey.showUsageInfo) private var showUsageInfo = SettingsDefaults.showUsageInfo
-    @AppStorage(SettingsKey.showCodexUsageInfo) private var showCodexUsageInfo = SettingsDefaults.showCodexUsageInfo
+    @AppStorage(SettingsKey.expandedUsageDisplay) private var expandedUsageDisplayRaw = SettingsDefaults.expandedUsageDisplay
     @ObservedObject private var usageTracker = UsageTracker.shared
     @ObservedObject private var codexUsageTracker = CodexUsageTracker.shared
 
@@ -377,15 +378,18 @@ private struct CompactLeftWing: View {
     private var displaySource: String { displaySession?.source ?? appState.primarySource }
     private var displayStatus: AgentStatus { displaySession?.status ?? .idle }
     private var liveTool: String? { displaySession?.currentTool }
+    private var expandedUsageDisplay: ExpandedUsageDisplayMode {
+        ExpandedUsageDisplayMode(rawValue: expandedUsageDisplayRaw) ?? SettingsManager.shared.expandedUsageDisplay
+    }
     @State private var shownTool: String?
     @State private var lingerTimer: Timer?
 
     var body: some View {
         HStack(spacing: 6) {
             if expanded {
-                if showUsageInfo && !showCodexUsageInfo && usageTracker.isAvailable {
+                if expandedUsageDisplay == .claude && usageTracker.isAvailable {
                     UsageInfoBar(data: usageTracker.data)
-                } else if showCodexUsageInfo && !showUsageInfo && codexUsageTracker.isAvailable {
+                } else if expandedUsageDisplay == .codex && codexUsageTracker.isAvailable {
                     CodexUsageInfoBar(data: codexUsageTracker.data)
                 }
             } else {

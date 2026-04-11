@@ -115,6 +115,11 @@ struct TerminalActivator {
             : session.ttyPath
         let effectiveTty = resolvedTTYPath(session: session, rawTTY: rawEffectiveTty)
 
+        if lower.contains("cmux") {
+            activateCmux(surfaceId: session.cmuxSurfaceId, workspaceId: session.cmuxWorkspaceId)
+            return
+        }
+
         // --- Tab-level switching (5 terminals) ---
 
         if lower.contains("iterm") {
@@ -919,9 +924,9 @@ struct TerminalActivator {
     }
 
     /// Find a CLI binary in common paths (Homebrew Intel + Apple Silicon, system)
-    private static func findBinary(_ name: String) -> String? {
+    private static func findBinary(_ name: String, extraPaths: [String] = []) -> String? {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let paths = [
+        let paths = extraPaths + [
             "/opt/homebrew/bin/\(name)",
             "/usr/local/bin/\(name)",
             "/usr/bin/\(name)",
@@ -996,5 +1001,23 @@ struct TerminalActivator {
             return nil
         }
         return normalizeTTYPath(output)
+    }
+
+    private static func activateCmux(surfaceId: String?, workspaceId: String?) {
+        activateByBundleId("com.cmuxterm.app")
+
+        guard let sid = surfaceId, !sid.isEmpty else { return }
+        guard let cmuxBin = findBinary("cmux", extraPaths: [
+            "/Applications/cmux.app/Contents/Resources/bin/cmux",
+            NSHomeDirectory() + "/Applications/cmux.app/Contents/Resources/bin/cmux",
+        ]) else { return }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            var args = ["focus-panel", "--panel", sid]
+            if let wid = workspaceId, !wid.isEmpty {
+                args += ["--workspace", wid]
+            }
+            _ = runProcess(cmuxBin, args: args)
+        }
     }
 }

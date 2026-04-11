@@ -43,6 +43,16 @@ final class ConfigInstallerTests: XCTestCase {
                     "matcher": "",
                     "hooks": [
                         [
+                            "command": "~/.codeisland/codeisland-hook.sh",
+                            "timeout": 5,
+                            "type": "command",
+                        ],
+                    ],
+                ],
+                [
+                    "matcher": "",
+                    "hooks": [
+                        [
                             "async": true,
                             "command": "~/.claude/hooks/bark-notify.sh",
                             "timeout": 10,

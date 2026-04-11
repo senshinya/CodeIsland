@@ -72,6 +72,7 @@ enum SettingsKey {
     static let showToolStatus = "showToolStatus"              // true = detailed, false = simple
 
     // Usage display
+    static let expandedUsageDisplay = "expandedUsageDisplay"
     static let showUsageInfo = "showUsageInfo"
     static let showCodexUsageInfo = "showCodexUsageInfo"
 
@@ -82,6 +83,23 @@ enum SettingsKey {
     static let collapsedWidthPreview = "collapsedWidthPreview"   // Transient: "" / "idle" / "working"
     static let expandedWidth = "expandedWidth"                   // Double absolute width; 0 = use default
     static let collapsedHeightOffset = "collapsedHeightOffset"   // Double offset from default collapsed height
+}
+
+enum ExpandedUsageDisplayMode: String, CaseIterable, Identifiable {
+    case none
+    case claude
+    case codex
+
+    var id: String { rawValue }
+
+    static func fromLegacy(showUsageInfo: Bool, showCodexUsageInfo: Bool) -> Self {
+        if showCodexUsageInfo { return .codex }
+        if showUsageInfo { return .claude }
+        return .none
+    }
+
+    var showsClaudeUsage: Bool { self == .claude }
+    var showsCodexUsage: Bool { self == .codex }
 }
 
 struct SettingsDefaults {
@@ -122,6 +140,7 @@ struct SettingsDefaults {
 
     static let showToolStatus = true
 
+    static let expandedUsageDisplay = ExpandedUsageDisplayMode.none.rawValue
     static let showUsageInfo = false
     static let showCodexUsageInfo = false
 
@@ -134,11 +153,24 @@ struct SettingsDefaults {
 
 @MainActor
 class SettingsManager {
-    static let shared = SettingsManager()
+    static let shared = SettingsManager(persistentDomainName: Bundle.main.bundleIdentifier)
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
+    private let persistentDomainName: String?
 
-    private init() {
+    init(defaults: UserDefaults = .standard, persistentDomainName: String? = nil) {
+        self.defaults = defaults
+        self.persistentDomainName = persistentDomainName
+        // Migrate legacy collapsedWidthOffset → per-state keys
+        if persistedObject(forKey: SettingsKey.collapsedWidthOffsetIdle) == nil,
+           persistedObject(forKey: SettingsKey.collapsedWidthOffsetWorking) == nil,
+           let legacy = persistedObject(forKey: SettingsKey.collapsedWidthOffset) as? Double, legacy != 0 {
+            defaults.set(legacy, forKey: SettingsKey.collapsedWidthOffsetIdle)
+            defaults.set(legacy, forKey: SettingsKey.collapsedWidthOffsetWorking)
+        }
+
+        migrateExpandedUsageDisplayIfNeeded()
+
         defaults.register(defaults: [
             SettingsKey.displayChoice: SettingsDefaults.displayChoice,
             SettingsKey.allowHorizontalDrag: SettingsDefaults.allowHorizontalDrag,
@@ -169,6 +201,7 @@ class SettingsManager {
             SettingsKey.mascotSpeedWaiting: SettingsDefaults.mascotSpeedWaiting,
             SettingsKey.sessionGroupingMode: SettingsDefaults.sessionGroupingMode,
             SettingsKey.showToolStatus: SettingsDefaults.showToolStatus,
+            SettingsKey.expandedUsageDisplay: SettingsDefaults.expandedUsageDisplay,
             SettingsKey.showUsageInfo: SettingsDefaults.showUsageInfo,
             SettingsKey.showCodexUsageInfo: SettingsDefaults.showCodexUsageInfo,
             SettingsKey.collapsedWidthOffset: SettingsDefaults.collapsedWidthOffset,
@@ -177,14 +210,32 @@ class SettingsManager {
             SettingsKey.expandedWidth: SettingsDefaults.expandedWidth,
             SettingsKey.collapsedHeightOffset: SettingsDefaults.collapsedHeightOffset,
         ])
+    }
 
-        // Migrate legacy collapsedWidthOffset → per-state keys
-        if defaults.object(forKey: SettingsKey.collapsedWidthOffsetIdle) == nil,
-           defaults.object(forKey: SettingsKey.collapsedWidthOffsetWorking) == nil,
-           let legacy = defaults.object(forKey: SettingsKey.collapsedWidthOffset) as? Double, legacy != 0 {
-            defaults.set(legacy, forKey: SettingsKey.collapsedWidthOffsetIdle)
-            defaults.set(legacy, forKey: SettingsKey.collapsedWidthOffsetWorking)
+    private func persistedObject(forKey key: String) -> Any? {
+        guard let persistentDomainName else { return defaults.object(forKey: key) }
+        return defaults.persistentDomain(forName: persistentDomainName)?[key]
+    }
+
+    private func migrateExpandedUsageDisplayIfNeeded() {
+        let mode: ExpandedUsageDisplayMode
+        if let raw = persistedObject(forKey: SettingsKey.expandedUsageDisplay) as? String,
+           let stored = ExpandedUsageDisplayMode(rawValue: raw) {
+            mode = stored
+        } else {
+            mode = ExpandedUsageDisplayMode.fromLegacy(
+                showUsageInfo: (persistedObject(forKey: SettingsKey.showUsageInfo) as? Bool) ?? false,
+                showCodexUsageInfo: (persistedObject(forKey: SettingsKey.showCodexUsageInfo) as? Bool) ?? false
+            )
+            defaults.set(mode.rawValue, forKey: SettingsKey.expandedUsageDisplay)
         }
+
+        syncLegacyUsageDisplayFlags(mode)
+    }
+
+    private func syncLegacyUsageDisplayFlags(_ mode: ExpandedUsageDisplayMode) {
+        defaults.set(mode.showsClaudeUsage, forKey: SettingsKey.showUsageInfo)
+        defaults.set(mode.showsCodexUsage, forKey: SettingsKey.showCodexUsageInfo)
     }
 
     var launchAtLogin: Bool {
@@ -267,6 +318,23 @@ class SettingsManager {
     var sessionGroupingMode: String {
         get { defaults.string(forKey: SettingsKey.sessionGroupingMode) ?? SettingsDefaults.sessionGroupingMode }
         set { defaults.set(newValue, forKey: SettingsKey.sessionGroupingMode) }
+    }
+
+    var expandedUsageDisplay: ExpandedUsageDisplayMode {
+        get {
+            if let raw = defaults.string(forKey: SettingsKey.expandedUsageDisplay),
+               let mode = ExpandedUsageDisplayMode(rawValue: raw) {
+                return mode
+            }
+            return ExpandedUsageDisplayMode.fromLegacy(
+                showUsageInfo: defaults.bool(forKey: SettingsKey.showUsageInfo),
+                showCodexUsageInfo: defaults.bool(forKey: SettingsKey.showCodexUsageInfo)
+            )
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: SettingsKey.expandedUsageDisplay)
+            syncLegacyUsageDisplayFlags(newValue)
+        }
     }
 
     var collapsedWidthOffset: Double {

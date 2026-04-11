@@ -23,7 +23,11 @@ final class UsageTracker: ObservableObject {
 
     private var fetchTask: Task<Void, Never>?
     private var refreshTimer: Timer?
+    private var retryTimer: Timer?
     private let cacheDuration: TimeInterval = 180  // 3 minutes
+    private let initialRetryDelay: TimeInterval = 15
+    private let maxRetryDelay: TimeInterval = 300
+    private var retryAttempt = 0
 
     /// Cached OAuth token so we don't hit the Keychain on every poll.
     private var cachedToken: String?
@@ -32,10 +36,10 @@ final class UsageTracker: ObservableObject {
 
     func startPolling() {
         Self.log.info("startPolling showUsageInfo path active")
-        fetch()
+        fetch(force: true)
         refreshTimer?.invalidate()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: cacheDuration, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.fetch() }
+            Task { @MainActor in self?.fetch(force: true) }
         }
     }
 
@@ -43,13 +47,16 @@ final class UsageTracker: ObservableObject {
         Self.log.info("stopPolling")
         refreshTimer?.invalidate()
         refreshTimer = nil
+        retryTimer?.invalidate()
+        retryTimer = nil
         fetchTask?.cancel()
         cachedToken = nil
+        retryAttempt = 0
     }
 
-    func fetch() {
+    func fetch(force: Bool = false) {
         // Skip if recently fetched
-        if Date().timeIntervalSince(data.fetchedAt) < 30 {
+        if !force, Date().timeIntervalSince(data.fetchedAt) < 30 {
             Self.log.info("fetch skipped due to cache window")
             return
         }
@@ -65,6 +72,7 @@ final class UsageTracker: ObservableObject {
             guard let token = cachedToken else {
                 Self.log.debug("No OAuth token found")
                 isAvailable = false
+                scheduleRetry()
                 return
             }
             do {
@@ -72,6 +80,7 @@ final class UsageTracker: ObservableObject {
                 if !Task.isCancelled {
                     self.data = usage
                     self.isAvailable = true
+                    self.resetRetryState()
                     Self.log.info("Usage fetch succeeded fiveHour=\(usage.fiveHour.utilization, privacy: .public) sevenDay=\(usage.sevenDay.utilization, privacy: .public)")
                 }
             } catch let error as URLError where error.code == .userAuthenticationRequired {
@@ -79,10 +88,34 @@ final class UsageTracker: ObservableObject {
                 Self.log.info("Token rejected, clearing cache")
                 cachedToken = nil
                 isAvailable = false
+                scheduleRetry()
             } catch {
                 Self.log.error("Usage fetch failed: \(error.localizedDescription, privacy: .public)")
+                scheduleRetry()
             }
         }
+    }
+
+    private func scheduleRetry() {
+        guard refreshTimer != nil else { return }
+        retryTimer?.invalidate()
+        let delay = nextRetryDelay()
+        retryTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.fetch(force: true) }
+        }
+        Self.log.info("scheduled usage retry in \(delay, privacy: .public)s attempt=\(self.retryAttempt, privacy: .public)")
+    }
+
+    private func nextRetryDelay() -> TimeInterval {
+        let delay = min(initialRetryDelay * pow(2, Double(retryAttempt)), maxRetryDelay)
+        retryAttempt += 1
+        return delay
+    }
+
+    private func resetRetryState() {
+        retryTimer?.invalidate()
+        retryTimer = nil
+        retryAttempt = 0
     }
 
     // MARK: - API

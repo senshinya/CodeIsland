@@ -25,16 +25,20 @@ final class CodexUsageTracker: ObservableObject {
     private let authPath = URL(fileURLWithPath: NSHomeDirectory() + "/.codex/auth.json")
     private var fetchTask: Task<Void, Never>?
     private var refreshTimer: Timer?
+    private var retryTimer: Timer?
     private let cacheDuration: TimeInterval = 180
+    private let initialRetryDelay: TimeInterval = 15
+    private let maxRetryDelay: TimeInterval = 300
+    private var retryAttempt = 0
 
     private init() {}
 
     func startPolling() {
         Self.log.info("startPolling codex usage")
-        fetch()
+        fetch(force: true)
         refreshTimer?.invalidate()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: cacheDuration, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.fetch() }
+            Task { @MainActor in self?.fetch(force: true) }
         }
     }
 
@@ -42,11 +46,14 @@ final class CodexUsageTracker: ObservableObject {
         Self.log.info("stopPolling")
         refreshTimer?.invalidate()
         refreshTimer = nil
+        retryTimer?.invalidate()
+        retryTimer = nil
         fetchTask?.cancel()
+        retryAttempt = 0
     }
 
-    func fetch() {
-        if Date().timeIntervalSince(data.fetchedAt) < 30 { return }
+    func fetch(force: Bool = false) {
+        if !force, Date().timeIntervalSince(data.fetchedAt) < 30 { return }
 
         fetchTask?.cancel()
         fetchTask = Task {
@@ -55,14 +62,38 @@ final class CodexUsageTracker: ObservableObject {
                 if !Task.isCancelled {
                     data = usage
                     isAvailable = usage.primary != nil || usage.secondary != nil
+                    resetRetryState()
                 }
             } catch {
                 Self.log.error("Usage fetch failed: \(error.localizedDescription, privacy: .public)")
                 if !Task.isCancelled {
                     isAvailable = false
+                    scheduleRetry()
                 }
             }
         }
+    }
+
+    private func scheduleRetry() {
+        guard refreshTimer != nil else { return }
+        retryTimer?.invalidate()
+        let delay = nextRetryDelay()
+        retryTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.fetch(force: true) }
+        }
+        Self.log.info("scheduled codex usage retry in \(delay, privacy: .public)s attempt=\(self.retryAttempt, privacy: .public)")
+    }
+
+    private func nextRetryDelay() -> TimeInterval {
+        let delay = min(initialRetryDelay * pow(2, Double(retryAttempt)), maxRetryDelay)
+        retryAttempt += 1
+        return delay
+    }
+
+    private func resetRetryState() {
+        retryTimer?.invalidate()
+        retryTimer = nil
+        retryAttempt = 0
     }
 
     private static func fetchUsage(authPath: URL) async throws -> UsageData {

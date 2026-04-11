@@ -35,6 +35,8 @@ public struct SessionSnapshot {
     public var tmuxClientTty: String?   // tmux client TTY for real terminal detection
     public var tmuxEnv: String?         // raw TMUX env var (socket info for non-default tmux server)
     public var termBundleId: String?    // __CFBundleIdentifier for precise terminal ID
+    public var cmuxSurfaceId: String?   // cmux surface UUID
+    public var cmuxWorkspaceId: String? // cmux workspace UUID
     public var cliPid: pid_t?            // CLI process PID (from bridge _ppid)
     public var cliStartTime: Date?       // Start time of the tracked CLI PID (guards PID reuse)
     public var source: String = "claude" // "claude" or "codex"
@@ -495,6 +497,8 @@ public func reduceEvent(
         if let pane = event.rawJSON["_tmux_pane"] as? String, !pane.isEmpty { sessions[sessionId]?.tmuxPane = pane }
         if let tmuxTty = event.rawJSON["_tmux_client_tty"] as? String, !tmuxTty.isEmpty { sessions[sessionId]?.tmuxClientTty = tmuxTty }
         if let tmux = event.rawJSON["_tmux"] as? String, !tmux.isEmpty { sessions[sessionId]?.tmuxEnv = tmux }
+        if let surface = event.rawJSON["_cmux_surface_id"] as? String, !surface.isEmpty { sessions[sessionId]?.cmuxSurfaceId = surface }
+        if let workspace = event.rawJSON["_cmux_workspace_id"] as? String, !workspace.isEmpty { sessions[sessionId]?.cmuxWorkspaceId = workspace }
         if let mode = event.rawJSON["permission_mode"] as? String { sessions[sessionId]?.permissionMode = mode }
         if let roots = event.rawJSON["workspace_roots"] as? [String], let first = roots.first, !first.isEmpty {
             sessions[sessionId]?.cwd = first
@@ -590,6 +594,12 @@ public func extractMetadata(into sessions: inout [String: SessionSnapshot], sess
     }
     if let tmux = event.rawJSON["_tmux"] as? String, !tmux.isEmpty {
         sessions[sessionId]?.tmuxEnv = tmux
+    }
+    if let surface = event.rawJSON["_cmux_surface_id"] as? String, !surface.isEmpty {
+        sessions[sessionId]?.cmuxSurfaceId = surface
+    }
+    if let workspace = event.rawJSON["_cmux_workspace_id"] as? String, !workspace.isEmpty {
+        sessions[sessionId]?.cmuxWorkspaceId = workspace
     }
     if let bundle = event.rawJSON["_term_bundle"] as? String, !bundle.isEmpty {
         sessions[sessionId]?.termBundleId = bundle

@@ -41,11 +41,15 @@ struct CLIConfig {
 }
 
 struct ConfigInstaller {
-    private static let bridgePath = NSHomeDirectory() + "/.claude/hooks/codeisland-bridge"
-    private static let hookScriptPath = NSHomeDirectory() + "/.claude/hooks/codeisland-hook.sh"
-    private static let hookCommand = "~/.claude/hooks/codeisland-hook.sh"
+    private static let codeislandDir = NSHomeDirectory() + "/.codeisland"
+    private static let bridgePath = codeislandDir + "/codeisland-bridge"
+    private static let hookScriptPath = codeislandDir + "/codeisland-hook.sh"
+    private static let hookCommand = "~/.codeisland/codeisland-hook.sh"
     /// Absolute path for external CLI hooks — avoids tilde expansion issues in IDE environments
-    private static let bridgeCommand = NSHomeDirectory() + "/.claude/hooks/codeisland-bridge"
+    private static let bridgeCommand = codeislandDir + "/codeisland-bridge"
+
+    private static let legacyBridgePath = NSHomeDirectory() + "/.claude/hooks/codeisland-bridge"
+    private static let legacyHookScriptPath = NSHomeDirectory() + "/.claude/hooks/codeisland-hook.sh"
 
     // MARK: - All supported CLIs
 
@@ -92,7 +96,7 @@ struct ConfigInstaller {
     ]
 
     /// Hook script version — bump this when the script template changes
-    private static let hookScriptVersion = 4
+    private static let hookScriptVersion = 5
 
     // Legacy plugin paths kept so old helper methods still compile even though
     // OpenCode is no longer offered as a supported integration.
@@ -104,7 +108,7 @@ struct ConfigInstaller {
     private static let hookScript = """
         #!/bin/bash
         # CodeIsland hook v\(hookScriptVersion) — native bridge with shell fallback
-        BRIDGE="$HOME/.claude/hooks/codeisland-bridge"
+        BRIDGE="$HOME/.codeisland/codeisland-bridge"
         if [ -x "$BRIDGE" ]; then
           exec "$BRIDGE" "$@"
         fi
@@ -127,9 +131,10 @@ struct ConfigInstaller {
     static func install() -> Bool {
         let fm = FileManager.default
 
-        // Ensure hooks directory
-        let hookDir = (hookScriptPath as NSString).deletingLastPathComponent
-        try? fm.createDirectory(atPath: hookDir, withIntermediateDirectories: true)
+        try? fm.createDirectory(atPath: codeislandDir, withIntermediateDirectories: true)
+
+        try? fm.removeItem(atPath: legacyBridgePath)
+        try? fm.removeItem(atPath: legacyHookScriptPath)
 
         // Install hook script + bridge binary (shared by all CLIs)
         installHookScript(fm: fm)
@@ -159,6 +164,8 @@ struct ConfigInstaller {
         let fm = FileManager.default
         try? fm.removeItem(atPath: hookScriptPath)
         try? fm.removeItem(atPath: bridgePath)
+        try? fm.removeItem(atPath: legacyBridgePath)
+        try? fm.removeItem(atPath: legacyHookScriptPath)
 
         for cli in allCLIs {
             uninstallHooks(cli: cli, fm: fm)

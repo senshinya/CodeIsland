@@ -423,14 +423,25 @@ private struct AppearancePage: View {
     @AppStorage(SettingsKey.aiMessageLines) private var aiMessageLines = SettingsDefaults.aiMessageLines
     @AppStorage(SettingsKey.showAgentDetails) private var showAgentDetails = SettingsDefaults.showAgentDetails
     @AppStorage(SettingsKey.showToolStatus) private var showToolStatus = SettingsDefaults.showToolStatus
-    @AppStorage(SettingsKey.showUsageInfo) private var showUsageInfo = SettingsDefaults.showUsageInfo
-    @AppStorage(SettingsKey.showCodexUsageInfo) private var showCodexUsageInfo = SettingsDefaults.showCodexUsageInfo
+    @AppStorage(SettingsKey.expandedUsageDisplay) private var expandedUsageDisplayRaw = SettingsDefaults.expandedUsageDisplay
     @AppStorage(SettingsKey.collapsedWidthOffsetIdle) private var collapsedWidthOffsetIdle = SettingsDefaults.collapsedWidthOffsetIdle
     @AppStorage(SettingsKey.collapsedWidthOffsetWorking) private var collapsedWidthOffsetWorking = SettingsDefaults.collapsedWidthOffsetWorking
     @AppStorage(SettingsKey.collapsedWidthPreview) private var collapsedWidthPreview = ""
     @AppStorage(SettingsKey.expandedWidth) private var expandedWidth = SettingsDefaults.expandedWidth
     @AppStorage(SettingsKey.collapsedHeightOffset) private var collapsedHeightOffset = SettingsDefaults.collapsedHeightOffset
     @State private var collapsedWidthPreviewTimer: Timer?
+
+    private var expandedUsageDisplay: Binding<ExpandedUsageDisplayMode> {
+        Binding(
+            get: {
+                ExpandedUsageDisplayMode(rawValue: expandedUsageDisplayRaw) ?? SettingsManager.shared.expandedUsageDisplay
+            },
+            set: { newValue in
+                expandedUsageDisplayRaw = newValue.rawValue
+                SettingsManager.shared.expandedUsageDisplay = newValue
+            }
+        )
+    }
 
     var body: some View {
         Form {
@@ -531,14 +542,11 @@ private struct AppearancePage: View {
                 }
                 Toggle(l10n["show_agent_details"], isOn: $showAgentDetails)
                 Toggle(l10n["show_tool_status"], isOn: $showToolStatus)
-                Toggle(l10n["show_usage_info"], isOn: $showUsageInfo)
-                    .onChange(of: showUsageInfo) { _, enabled in
-                        if enabled { showCodexUsageInfo = false }
-                    }
-                Toggle(l10n["show_codex_usage_info"], isOn: $showCodexUsageInfo)
-                    .onChange(of: showCodexUsageInfo) { _, enabled in
-                        if enabled { showUsageInfo = false }
-                    }
+                Picker(l10n["expanded_usage_display"], selection: expandedUsageDisplay) {
+                    Text(l10n["none"]).tag(ExpandedUsageDisplayMode.none)
+                    Text(l10n["claude"]).tag(ExpandedUsageDisplayMode.claude)
+                    Text(l10n["codex"]).tag(ExpandedUsageDisplayMode.codex)
+                }
             }
         }
         .formStyle(.grouped)
