@@ -291,7 +291,7 @@ struct SessionChatView: View {
                 hasCompletedInitialScroll = true
                 revealInitialContent()
             }
-            if !verifyBottom, scrollController.documentHeight != nil {
+            if !verifyBottom, !wasInitialPending, scrollController.documentHeight != nil {
                 isPinnedToBottom = scrollController.isAtBottom
             }
             if isPinnedToBottom {
@@ -409,7 +409,23 @@ struct SessionChatView: View {
     }
 
     private func preservePinnedBottom(with proxy: ScrollViewProxy, previousDocumentHeight: CGFloat) {
+        // If a previous scroll task is still in-flight, its delta was never applied.
+        // Fall back to absolute scrollToBottom to avoid accumulating position drift.
+        let previousTaskPending = pendingPinnedScroll && scrollToBottomTask != nil
         scrollToBottomTask?.cancel()
+
+        if previousTaskPending {
+            scrollToBottomTask = Task { @MainActor in
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                performScrollToBottom(with: proxy)
+                pendingPinnedDocumentHeight = nil
+                pendingPinnedScroll = false
+                shouldAutoScrollOnNextLayout = false
+            }
+            return
+        }
+
         scrollToBottomTask = Task { @MainActor in
             for delay in [0, 16, 32, 64] {
                 if delay > 0 {
@@ -865,15 +881,12 @@ struct SessionChatView: View {
             text: text,
             timestamp: Date()
         )
+        // Sending a message always pins to bottom — the user expects to see their own message.
+        isPinnedToBottom = true
+        newMessageCount = 0
         prepareForMessageListChange()
-        if shouldAutoScrollOnNextLayout {
-            animatedAppearanceMessageIDs = hasCompletedInitialScroll ? [pendingMessage.id] : []
-            pendingUserMessages.append(pendingMessage)
-        } else {
-            newMessageCount += 1
-            animatedAppearanceMessageIDs = []
-            pendingUserMessages.append(pendingMessage)
-        }
+        animatedAppearanceMessageIDs = hasCompletedInitialScroll ? [pendingMessage.id] : []
+        pendingUserMessages.append(pendingMessage)
         messageInput = ""
         Task { @MainActor in
             if watchedTranscriptPath == nil {
@@ -914,6 +927,9 @@ struct PendingMessageReconciliation: Equatable {
 }
 
 final class SessionChatScrollController: ObservableObject {
+    /// Shared threshold for "at bottom" detection — keeps observer and controller consistent.
+    static let bottomThreshold: CGFloat = 24
+
     private weak var scrollView: NSScrollView?
 
     var documentHeight: CGFloat? {
@@ -924,7 +940,7 @@ final class SessionChatScrollController: ObservableObject {
         guard let scrollView else { return false }
         let visibleMaxY = scrollView.contentView.documentVisibleRect.maxY
         let documentMaxY = scrollView.documentView?.bounds.maxY ?? 0
-        return visibleMaxY >= documentMaxY - 1
+        return visibleMaxY >= documentMaxY - Self.bottomThreshold
     }
 
     func attach(_ scrollView: NSScrollView) {
@@ -1046,7 +1062,7 @@ private final class ScrollObserverView: NSView {
         guard let scrollView = observedScrollView else { return }
         let visibleMaxY = scrollView.contentView.documentVisibleRect.maxY
         let documentMaxY = scrollView.documentView?.bounds.maxY ?? 0
-        onScroll?(visibleMaxY >= documentMaxY - 24)
+        onScroll?(visibleMaxY >= documentMaxY - SessionChatScrollController.bottomThreshold)
     }
 }
 
