@@ -4,11 +4,20 @@ import Darwin
 
 /// Chat history view for a supported CLI session.
 struct SessionChatView: View {
+    private enum InitialScrollTiming {
+        static let stableSampleInterval: Duration = .milliseconds(16)
+        static let stableDetectionTimeout: Duration = .milliseconds(200)
+        static let bottomLockSampleInterval: Duration = .milliseconds(16)
+        static let bottomLockTimeout: Duration = .milliseconds(250)
+        static let requiredStableSamples = 2
+    }
+
     let sessionId: String
     let session: SessionSnapshot
     var appState: AppState
     @State private var messages: [SessionChatMessage] = []
     @State private var pendingUserMessages: [SessionChatMessage] = []
+    @State private var resolvedPendingDisplayIDs: [String: String] = [:]
     @State private var messageInput = ""
     @State private var isLoading = true
     @State private var inputFocusRequest = 0
@@ -24,16 +33,23 @@ struct SessionChatView: View {
     @State private var pendingPinnedScroll = false
     @State private var isPerformingProgrammaticScroll = false
     @State private var programmaticScrollResetTask: Task<Void, Never>?
-    @State private var scrollViewportHeight: CGFloat = 0
-    @State private var bottomAnchorMaxY: CGFloat = 0
+    @State private var pendingPinnedDocumentHeight: CGFloat?
+    @State private var animatedAppearanceMessageIDs: Set<String> = []
+    @StateObject private var scrollController = SessionChatScrollController()
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
     @AppStorage(SettingsKey.maxPanelHeight) private var maxPanelHeight = SettingsDefaults.maxPanelHeight
 
     private var fontSize: CGFloat { CGFloat(contentFontSize) }
     private let accent = Color(red: 0.85, green: 0.47, blue: 0.34)
     private let toolGreen = Color(red: 0.40, green: 0.88, blue: 0.62)
-    private var displayedMessages: [SessionChatMessage] { messages + pendingUserMessages }
-    private var visibleMessages: [SessionChatMessage] {
+    private var displayedMessages: [DisplayedChatMessage] {
+        SessionChatDisplayReconciler.displayMessages(
+            messages: messages,
+            pending: pendingUserMessages,
+            resolvedDisplayIDs: resolvedPendingDisplayIDs
+        )
+    }
+    private var visibleMessages: [DisplayedChatMessage] {
         let limit = session.source == "codex" ? 240 : 400
         if displayedMessages.count > limit {
             return Array(displayedMessages.suffix(limit))
@@ -70,6 +86,8 @@ struct SessionChatView: View {
             isPinnedToBottom = true
             shouldAutoScrollOnNextLayout = true
             pendingPinnedScroll = false
+            pendingPinnedDocumentHeight = nil
+            animatedAppearanceMessageIDs = []
             isPerformingProgrammaticScroll = false
             loadMessages()
         }
@@ -149,7 +167,12 @@ struct SessionChatView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 4) {
                     ForEach(visibleMessages) { msg in
-                        messageRow(msg)
+                        messageRow(msg.message)
+                            .modifier(
+                                MessageAppearanceModifier(
+                                    animateOnAppear: animatedAppearanceMessageIDs.contains(msg.id)
+                                )
+                            )
                             .id(msg.id)
                             .transition(.asymmetric(
                                 insertion: .move(edge: .bottom).combined(with: .opacity),
@@ -162,14 +185,6 @@ struct SessionChatView: View {
                 .padding(.bottom, 10)
                 .id("chat_bottom")
                 .background(
-                    GeometryReader { geometry in
-                        Color.clear.preference(
-                            key: ChatBottomAnchorMaxYPreferenceKey.self,
-                            value: geometry.frame(in: .named("chat_scroll")).maxY
-                        )
-                    }
-                )
-                .background(
                     ScrollViewLiveScrollObserver { atBottom in
                         guard hasCompletedInitialScroll else { return }
                         guard !isPerformingProgrammaticScroll else { return }
@@ -177,6 +192,8 @@ struct SessionChatView: View {
                         pendingPinnedScroll = false
                         shouldAutoScrollOnNextLayout = false
                         isPinnedToBottom = atBottom
+                    } onResolveScrollView: { scrollView in
+                        scrollController.attach(scrollView)
                     }
                 )
             }
@@ -184,26 +201,16 @@ struct SessionChatView: View {
             .textSelection(.disabled)
             .frame(maxHeight: chatMaxHeight)
             .opacity(hasCompletedInitialScroll ? 1 : 0)
-            .background(
-                GeometryReader { geometry in
-                    Color.clear.preference(
-                        key: ChatViewportHeightPreferenceKey.self,
-                        value: geometry.size.height
-                    )
-                }
-            )
-            .onPreferenceChange(ChatViewportHeightPreferenceKey.self) { height in
-                scrollViewportHeight = height
-            }
-            .onPreferenceChange(ChatBottomAnchorMaxYPreferenceKey.self) { maxY in
-                bottomAnchorMaxY = maxY
-            }
             .onAppear {
                 scrollToBottom(with: proxy, isInitial: true)
             }
             .onChange(of: visibleMessages) { _, _ in
                 guard shouldAutoScrollOnNextLayout else { return }
-                scrollToBottom(with: proxy)
+                if let previousDocumentHeight = pendingPinnedDocumentHeight, hasCompletedInitialScroll {
+                    preservePinnedBottom(with: proxy, previousDocumentHeight: previousDocumentHeight)
+                } else {
+                    scrollToBottom(with: proxy)
+                }
             }
         }
     }
@@ -212,15 +219,18 @@ struct SessionChatView: View {
         let wasInitialPending = isInitial || !hasCompletedInitialScroll
         scrollToBottomTask?.cancel()
         scrollToBottomTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(75))
+            if wasInitialPending {
+                await waitForStableInitialLayout()
+            } else {
+                try? await Task.sleep(for: .milliseconds(75))
+            }
             guard !Task.isCancelled else { return }
             performScrollToBottom(with: proxy)
-
-            try? await Task.sleep(for: .milliseconds(90))
-            guard !Task.isCancelled else { return }
-            if bottomAnchorMaxY > scrollViewportHeight + 12 {
-                performScrollToBottom(with: proxy)
+            if wasInitialPending {
+                await settleInitialBottomLock(with: proxy)
             }
+
+            pendingPinnedDocumentHeight = nil
 
             pendingPinnedScroll = false
             shouldAutoScrollOnNextLayout = false
@@ -230,13 +240,103 @@ struct SessionChatView: View {
         }
     }
 
-    private func performScrollToBottom(with proxy: ScrollViewProxy) {
+    private func waitForStableInitialLayout() async {
+        var lastHeight: CGFloat?
+        var stableSampleCount = 0
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: InitialScrollTiming.stableDetectionTimeout)
+
+        while clock.now < deadline {
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+
+            guard let documentHeight = scrollController.documentHeight, documentHeight > 0 else {
+                stableSampleCount = 0
+                try? await Task.sleep(for: InitialScrollTiming.stableSampleInterval)
+                continue
+            }
+
+            if let lastHeight, abs(documentHeight - lastHeight) < 0.5 {
+                stableSampleCount += 1
+            } else {
+                stableSampleCount = 0
+            }
+
+            if stableSampleCount >= InitialScrollTiming.requiredStableSamples {
+                return
+            }
+
+            lastHeight = documentHeight
+            try? await Task.sleep(for: InitialScrollTiming.stableSampleInterval)
+        }
+    }
+
+    private func settleInitialBottomLock(with proxy: ScrollViewProxy) async {
+        var lastHeight = scrollController.documentHeight ?? 0
+        var stableSampleCount = 0
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: InitialScrollTiming.bottomLockTimeout)
+
+        while clock.now < deadline {
+            try? await Task.sleep(for: InitialScrollTiming.bottomLockSampleInterval)
+            guard !Task.isCancelled else { return }
+
+            guard let currentHeight = scrollController.documentHeight, currentHeight > 0 else {
+                stableSampleCount = 0
+                continue
+            }
+
+            if abs(currentHeight - lastHeight) > 0.5 {
+                if !scrollController.preservePinnedBottom(previousDocumentHeight: lastHeight) {
+                    performScrollToBottom(with: proxy)
+                }
+                lastHeight = currentHeight
+                stableSampleCount = 0
+            } else {
+                stableSampleCount += 1
+                if stableSampleCount >= InitialScrollTiming.requiredStableSamples {
+                    return
+                }
+            }
+        }
+    }
+
+    private func preservePinnedBottom(with proxy: ScrollViewProxy, previousDocumentHeight: CGFloat) {
+        scrollToBottomTask?.cancel()
+        scrollToBottomTask = Task { @MainActor in
+            for delay in [0, 16, 32, 64] {
+                if delay > 0 {
+                    try? await Task.sleep(for: .milliseconds(delay))
+                } else {
+                    await Task.yield()
+                }
+                guard !Task.isCancelled else { return }
+                if scrollController.preservePinnedBottom(previousDocumentHeight: previousDocumentHeight) {
+                    pendingPinnedDocumentHeight = nil
+                    pendingPinnedScroll = false
+                    shouldAutoScrollOnNextLayout = false
+                    return
+                }
+            }
+
+            if !Task.isCancelled {
+                performScrollToBottom(with: proxy)
+            }
+            pendingPinnedDocumentHeight = nil
+            pendingPinnedScroll = false
+            shouldAutoScrollOnNextLayout = false
+        }
+    }
+
+    private func performScrollToBottom(with proxy: ScrollViewProxy, preferAnchorScroll: Bool = false) {
         programmaticScrollResetTask?.cancel()
         isPerformingProgrammaticScroll = true
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            proxy.scrollTo("chat_bottom", anchor: .bottom)
+        if preferAnchorScroll || !scrollController.scrollToBottom() {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo("chat_bottom", anchor: .bottom)
+            }
         }
         programmaticScrollResetTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(120))
@@ -249,6 +349,7 @@ struct SessionChatView: View {
         let shouldStick = isPinnedToBottom || !hasCompletedInitialScroll
         shouldAutoScrollOnNextLayout = shouldStick
         pendingPinnedScroll = shouldStick
+        pendingPinnedDocumentHeight = shouldStick && hasCompletedInitialScroll ? scrollController.documentHeight : nil
     }
 
     private var chatMaxHeight: CGFloat {
@@ -433,6 +534,7 @@ struct SessionChatView: View {
                 await MainActor.run {
                     messages = []
                     pendingUserMessages = []
+                    resolvedPendingDisplayIDs = [:]
                     stopWatchingTranscript()
                     isLoading = false
                     startTranscriptDiscovery()
@@ -572,17 +674,59 @@ struct SessionChatView: View {
 
     @MainActor
     private func applyParsedMessages(_ parsed: [SessionChatMessage]) {
-        if parsed != messages {
-            prepareForMessageListChange()
-            if shouldAutoScrollOnNextLayout && shouldAnimateMessageInsertion(from: messages, to: parsed) {
-                withAnimation(.spring(response: 0.24, dampingFraction: 0.88)) {
-                    messages = parsed
-                }
-            } else {
-                messages = parsed
-            }
+        let reconciliation = SessionChatDisplayReconciler.reconcilePendingMessages(
+            pending: pendingUserMessages,
+            parsed: parsed,
+            existingResolvedDisplayIDs: resolvedPendingDisplayIDs
+        )
+        let nextDisplayIDs = SessionChatDisplayReconciler.updatedResolvedDisplayIDs(
+            existing: resolvedPendingDisplayIDs,
+            parsed: parsed,
+            matchedDisplayIDs: reconciliation.matchedDisplayIDs
+        )
+        let messagesChanged = parsed != messages
+        let pendingChanged = reconciliation.unresolvedPending != pendingUserMessages
+        let displayIDsChanged = nextDisplayIDs != resolvedPendingDisplayIDs
+
+        guard messagesChanged || pendingChanged || displayIDsChanged else { return }
+
+        let oldDisplayedMessages = SessionChatDisplayReconciler.displayMessages(
+            messages: messages,
+            pending: pendingUserMessages,
+            resolvedDisplayIDs: resolvedPendingDisplayIDs
+        )
+        let newDisplayedMessages = SessionChatDisplayReconciler.displayMessages(
+            messages: parsed,
+            pending: reconciliation.unresolvedPending,
+            resolvedDisplayIDs: nextDisplayIDs
+        )
+        let insertedDisplayIDs = Set(newDisplayedMessages.map(\.id))
+            .subtracting(oldDisplayedMessages.map(\.id))
+
+        prepareForMessageListChange()
+        let applyStateChanges = {
+            messages = parsed
+            pendingUserMessages = reconciliation.unresolvedPending
+            resolvedPendingDisplayIDs = nextDisplayIDs
         }
-        reconcilePendingMessages(with: parsed)
+
+        let shouldAnimateInsertion = shouldAnimateMessageInsertion(
+            from: oldDisplayedMessages,
+            to: newDisplayedMessages
+        )
+
+        if shouldAutoScrollOnNextLayout {
+            animatedAppearanceMessageIDs = hasCompletedInitialScroll ? insertedDisplayIDs : []
+            applyStateChanges()
+        } else if shouldAnimateInsertion {
+            animatedAppearanceMessageIDs = []
+            withAnimation(.spring(response: 0.24, dampingFraction: 0.88)) {
+                applyStateChanges()
+            }
+        } else {
+            animatedAppearanceMessageIDs = []
+            applyStateChanges()
+        }
     }
 
     private func sendMessage() {
@@ -595,8 +739,14 @@ struct SessionChatView: View {
             timestamp: Date()
         )
         prepareForMessageListChange()
-        withAnimation(.spring(response: 0.24, dampingFraction: 0.88)) {
+        if shouldAutoScrollOnNextLayout {
+            animatedAppearanceMessageIDs = hasCompletedInitialScroll ? [pendingMessage.id] : []
             pendingUserMessages.append(pendingMessage)
+        } else {
+            animatedAppearanceMessageIDs = []
+            withAnimation(.spring(response: 0.24, dampingFraction: 0.88)) {
+                pendingUserMessages.append(pendingMessage)
+            }
         }
         messageInput = ""
         Task { @MainActor in
@@ -609,47 +759,7 @@ struct SessionChatView: View {
         }
     }
 
-    private func reconcilePendingMessages(with parsed: [SessionChatMessage]) {
-        let parsedUsers = parsed.filter(\.isUser)
-        guard !parsedUsers.isEmpty, !pendingUserMessages.isEmpty else { return }
-
-        var searchIndex = 0
-        var unresolved: [SessionChatMessage] = []
-
-        for pending in pendingUserMessages {
-            let pendingText = normalizedUserText(pending.text)
-            var matched = false
-
-            while searchIndex < parsedUsers.count {
-                let candidate = parsedUsers[searchIndex]
-                searchIndex += 1
-
-                let sameText = normalizedUserText(candidate.text) == pendingText
-                let closeInTime = abs(candidate.timestamp.timeIntervalSince(pending.timestamp)) < 30
-                if sameText && closeInTime {
-                    matched = true
-                    break
-                }
-            }
-
-            if !matched {
-                unresolved.append(pending)
-            }
-        }
-
-        if unresolved != pendingUserMessages {
-            prepareForMessageListChange()
-            withAnimation(.easeOut(duration: 0.18)) {
-                pendingUserMessages = unresolved
-            }
-        }
-    }
-
-    private func normalizedUserText(_ text: String) -> String {
-        text.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func shouldAnimateMessageInsertion(from old: [SessionChatMessage], to new: [SessionChatMessage]) -> Bool {
+    private func shouldAnimateMessageInsertion(from old: [DisplayedChatMessage], to new: [DisplayedChatMessage]) -> Bool {
         guard !old.isEmpty else { return false }
         let oldIds = Set(old.map(\.id))
         return new.contains { !oldIds.contains($0.id) }
@@ -673,39 +783,184 @@ struct SessionChatView: View {
     }
 }
 
-private struct ChatViewportHeightPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+struct DisplayedChatMessage: Identifiable, Equatable {
+    let id: String
+    let message: SessionChatMessage
+}
 
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
+struct PendingMessageReconciliation: Equatable {
+    let unresolvedPending: [SessionChatMessage]
+    let matchedDisplayIDs: [String: String]
+}
+
+final class SessionChatScrollController: ObservableObject {
+    private weak var scrollView: NSScrollView?
+
+    var documentHeight: CGFloat? {
+        scrollView?.documentView?.bounds.height
+    }
+
+    func attach(_ scrollView: NSScrollView) {
+        self.scrollView = scrollView
+    }
+
+    @discardableResult
+    func scrollToBottom() -> Bool {
+        guard let scrollView, let documentView = scrollView.documentView else { return false }
+
+        let viewportHeight = scrollView.contentView.bounds.height
+        let documentHeight = documentView.bounds.height
+        let targetY = max(0, documentHeight - viewportHeight)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: targetY))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        return true
+    }
+
+    @discardableResult
+    func preservePinnedBottom(previousDocumentHeight: CGFloat) -> Bool {
+        guard let scrollView, let documentView = scrollView.documentView else { return false }
+
+        let newDocumentHeight = documentView.bounds.height
+        let delta = newDocumentHeight - previousDocumentHeight
+        guard abs(delta) > 0.5 else { return false }
+
+        let clipView = scrollView.contentView
+        let maxY = max(0, newDocumentHeight - clipView.bounds.height)
+        var origin = clipView.bounds.origin
+        origin.y = min(max(0, origin.y + delta), maxY)
+        clipView.scroll(to: origin)
+        scrollView.reflectScrolledClipView(clipView)
+        return true
     }
 }
 
-private struct ChatBottomAnchorMaxYPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+private struct MessageAppearanceModifier: ViewModifier {
+    let animateOnAppear: Bool
+    @State private var isVisible = false
 
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
+    func body(content: Content) -> some View {
+        content
+            .opacity(animateOnAppear ? (isVisible ? 1 : 0.2) : 1)
+            .offset(y: animateOnAppear ? (isVisible ? 0 : 8) : 0)
+            .scaleEffect(animateOnAppear ? (isVisible ? 1 : 0.985) : 1, anchor: .bottom)
+            .onAppear {
+                guard animateOnAppear else {
+                    isVisible = true
+                    return
+                }
+                isVisible = false
+                withAnimation(.easeOut(duration: 0.18)) {
+                    isVisible = true
+                }
+            }
+    }
+}
+
+enum SessionChatDisplayReconciler {
+    static func displayMessages(
+        messages: [SessionChatMessage],
+        pending: [SessionChatMessage],
+        resolvedDisplayIDs: [String: String]
+    ) -> [DisplayedChatMessage] {
+        let resolvedMessages = messages.map { message in
+            DisplayedChatMessage(
+                id: resolvedDisplayIDs[message.id] ?? message.id,
+                message: message
+            )
+        }
+        let pendingMessages = pending.map { message in
+            DisplayedChatMessage(id: message.id, message: message)
+        }
+        return resolvedMessages + pendingMessages
+    }
+
+    static func reconcilePendingMessages(
+        pending: [SessionChatMessage],
+        parsed: [SessionChatMessage],
+        existingResolvedDisplayIDs: [String: String]
+    ) -> PendingMessageReconciliation {
+        let parsedUsers = parsed.filter(\.isUser)
+        guard !parsedUsers.isEmpty, !pending.isEmpty else {
+            return PendingMessageReconciliation(unresolvedPending: pending, matchedDisplayIDs: [:])
+        }
+
+        var searchIndex = 0
+        var unresolved: [SessionChatMessage] = []
+        var matchedDisplayIDs: [String: String] = [:]
+
+        for pendingMessage in pending {
+            var matched = false
+
+            while searchIndex < parsedUsers.count {
+                let candidate = parsedUsers[searchIndex]
+                searchIndex += 1
+
+                guard pendingMessageMatchesParsedUser(pendingMessage, candidate) else { continue }
+                matchedDisplayIDs[candidate.id] = existingResolvedDisplayIDs[candidate.id] ?? pendingMessage.id
+                matched = true
+                break
+            }
+
+            if !matched {
+                unresolved.append(pendingMessage)
+            }
+        }
+
+        return PendingMessageReconciliation(
+            unresolvedPending: unresolved,
+            matchedDisplayIDs: matchedDisplayIDs
+        )
+    }
+
+    static func updatedResolvedDisplayIDs(
+        existing: [String: String],
+        parsed: [SessionChatMessage],
+        matchedDisplayIDs: [String: String]
+    ) -> [String: String] {
+        let parsedIDs = Set(parsed.map(\.id))
+        var updated = existing.filter { parsedIDs.contains($0.key) }
+        for (parsedID, displayID) in matchedDisplayIDs {
+            updated[parsedID] = displayID
+        }
+        return updated
+    }
+
+    private static func pendingMessageMatchesParsedUser(
+        _ pending: SessionChatMessage,
+        _ parsed: SessionChatMessage
+    ) -> Bool {
+        guard parsed.isUser else { return false }
+        let sameText = normalizedUserText(parsed.text) == normalizedUserText(pending.text)
+        let closeInTime = abs(parsed.timestamp.timeIntervalSince(pending.timestamp)) < 30
+        return sameText && closeInTime
+    }
+
+    private static func normalizedUserText(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
 private struct ScrollViewLiveScrollObserver: NSViewRepresentable {
     var onScroll: (Bool) -> Void
+    var onResolveScrollView: ((NSScrollView) -> Void)? = nil
 
     func makeNSView(context: Context) -> ScrollObserverView {
         let view = ScrollObserverView()
         view.onScroll = onScroll
+        view.onResolveScrollView = onResolveScrollView
         return view
     }
 
     func updateNSView(_ nsView: ScrollObserverView, context: Context) {
         nsView.onScroll = onScroll
+        nsView.onResolveScrollView = onResolveScrollView
         nsView.attachIfNeeded()
     }
 }
 
 final class ScrollObserverView: NSView {
     var onScroll: ((Bool) -> Void)?
+    var onResolveScrollView: ((NSScrollView) -> Void)?
     private weak var observedScrollView: NSScrollView?
     private var notificationToken: NSObjectProtocol?
 
@@ -724,6 +979,7 @@ final class ScrollObserverView: NSView {
         }
 
         observedScrollView = scrollView
+        onResolveScrollView?(scrollView)
         scrollView.contentView.postsBoundsChangedNotifications = true
         notificationToken = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification,
