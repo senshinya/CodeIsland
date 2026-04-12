@@ -176,7 +176,7 @@ struct NotchPanelView: View {
                             .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .top)))
                         }
                     case .completionCard:
-                        CompletionCardView(appState: appState)
+                        CompletionCardContent(appState: appState)
                             .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .top)))
                     case .sessionList:
                         SessionListView(appState: appState, onlySessionId: nil)
@@ -1562,122 +1562,104 @@ private struct PixelButton: View {
     }
 }
 
-// MARK: - Session List
+// MARK: - Completion Card Content
+// Flat replacement for the old CompletionCardView + RetainedCompletionSessionCard.
+// Uses SessionCard directly (no extra nesting wrapper) + optional accessories.
+// The old deeply-nested version triggered a SwiftUI StackLayout crash.
 
-private struct CompletionCardView: View {
+private struct CompletionCardContent: View {
     var appState: AppState
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
 
     private var completionSessionId: String? { appState.justCompletedSessionId }
     private var completionSession: SessionSnapshot? {
         guard let completionSessionId else { return nil }
-        if let live = appState.sessions[completionSessionId] {
-            return live
-        }
+        if let live = appState.sessions[completionSessionId] { return live }
         if appState.retainedCompletionSessionId == completionSessionId {
             return appState.retainedCompletionSession
         }
         return nil
     }
-    private var displaySessionId: String? {
-        if let completionSessionId, completionSession != nil { return completionSessionId }
-        return nil
-    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if let session = completionSession,
-               let sessionId = displaySessionId {
-                RetainedCompletionSessionCard(
-                    appState: appState,
+        if let session = completionSession, let sessionId = completionSessionId {
+            // Flat layout: SessionCard + accessories as siblings in one VStack
+            VStack(spacing: 0) {
+                SessionCard(
                     sessionId: sessionId,
                     session: session,
-                    fontSize: CGFloat(contentFontSize)
-                )
-            } else {
-                SessionListView(appState: appState, onlySessionId: completionSessionId)
-            }
-        }
-    }
-}
-
-private struct RetainedCompletionSessionCard: View {
-    var appState: AppState
-    let sessionId: String
-    let session: SessionSnapshot
-    let fontSize: CGFloat
-
-    private var canSendMessage: Bool {
-        SessionChatView.SessionMessageBarSupport.canShow(for: session)
-    }
-
-    private var hasAssistantSummary: Bool {
-        session.recentMessages.isEmpty
-            && !(session.lastAssistantMessage?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-    }
-
-    private var showsAccessorySection: Bool {
-        hasAssistantSummary || canSendMessage
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            SessionCard(sessionId: sessionId, session: session, isCompletion: true, embeddedInContainer: true)
-
-            if showsAccessorySection {
-                Rectangle()
-                    .fill(.white.opacity(0.045))
-                    .frame(height: 0.5)
-                    .padding(.horizontal, 22)
-            }
-
-            if let lastAssistant = session.lastAssistantMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
-               hasAssistantSummary {
-                HStack(alignment: .top, spacing: 4) {
-                    Text("$")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color(red: 0.85, green: 0.47, blue: 0.34))
-                    Text(ChatMessageTextFormatter.inlineMarkdown(lastAssistant))
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.82))
-                        .lineLimit(2)
-                        .truncationMode(.tail)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 18)
-                .padding(.top, 10)
-                .padding(.bottom, canSendMessage ? 2 : 12)
-            }
-
-            if canSendMessage {
-                SessionChatView.SessionMessageInputBar(
-                    session: session,
-                    fontSize: fontSize,
-                    onFocusChange: { appState.setMessageInputFocused($0) },
-                    onSubmitText: { text in
-                        Task.detached {
-                            await MessageSender.send(text, to: session, sessionId: sessionId)
+                    isCompletion: true,
+                    onChat: (session.isClaude || session.isCodex) ? {
+                        withAnimation(NotchAnimation.open) {
+                            appState.cancelCompletionQueue()
+                            appState.surface = .chatHistory(sessionId: sessionId)
                         }
-                        appState.completeCompletionMessageSubmission()
-                    },
-                    outerHorizontalPadding: 16,
-                    outerTopPadding: hasAssistantSummary ? 8 : 10,
-                    outerBottomPadding: 12
+                    } : nil
                 )
+
+                // Assistant summary
+                if session.recentMessages.isEmpty,
+                   let lastAssistant = session.lastAssistantMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !lastAssistant.isEmpty {
+                    Rectangle().fill(.white.opacity(0.045)).frame(height: 0.5).padding(.horizontal, 22)
+                    HStack(alignment: .top, spacing: 4) {
+                        Text("$")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color(red: 0.85, green: 0.47, blue: 0.34))
+                        Text(ChatMessageTextFormatter.inlineMarkdown(lastAssistant))
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.82))
+                            .lineLimit(2)
+                            .truncationMode(.tail)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.top, 10)
+                    .padding(.bottom, SessionChatView.SessionMessageBarSupport.canShow(for: session) ? 2 : 12)
+                }
+
+                // Reply bar
+                if SessionChatView.SessionMessageBarSupport.canShow(for: session) {
+                    let hasAssistantAbove = session.recentMessages.isEmpty
+                        && !(session.lastAssistantMessage?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                    if !hasAssistantAbove {
+                        Rectangle().fill(.white.opacity(0.045)).frame(height: 0.5).padding(.horizontal, 22)
+                    }
+                    SessionChatView.SessionMessageInputBar(
+                        session: session,
+                        fontSize: CGFloat(contentFontSize),
+                        onFocusChange: { appState.setMessageInputFocused($0) },
+                        onSubmitText: { text in
+                            Task.detached {
+                                await MessageSender.send(text, to: session, sessionId: sessionId)
+                            }
+                            appState.completeCompletionMessageSubmission()
+                        },
+                        outerHorizontalPadding: 16,
+                        outerTopPadding: 10,
+                        outerBottomPadding: 12
+                    )
+                }
             }
+            .padding(.vertical, 4)
+
+            // Expand to show all sessions
+            if appState.sessions.count > 1 {
+                SessionsExpandLink(count: appState.sessions.count) {
+                    withAnimation(NotchAnimation.open) {
+                        appState.surface = .sessionList
+                        appState.cancelCompletionQueue()
+                    }
+                }
+            }
+        } else {
+            // Fallback: session not resolved — show regular session list
+            SessionListView(appState: appState, onlySessionId: completionSessionId)
         }
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white.opacity(0.05))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(.white.opacity(0.06), lineWidth: 1)
-        )
-        .padding(.horizontal, 6)
-        .padding(.vertical, 4)
     }
 }
+
+// MARK: - Session List
 
 private struct SessionListView: View {
     var appState: AppState

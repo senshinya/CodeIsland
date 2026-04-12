@@ -595,7 +595,9 @@ final class AppState {
 
     private func doShowCompletion(_ sessionId: String, retainedSession: SessionSnapshot? = nil) {
         activeSessionId = sessionId
-        surface = .completionCard(sessionId: sessionId)
+        withAnimation(NotchAnimation.pop) {
+            surface = .completionCard(sessionId: sessionId)
+        }
         completionHasBeenEntered = false
         if let retainedSession, sessions[sessionId] == nil {
             retainedCompletionSessionId = sessionId

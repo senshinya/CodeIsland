@@ -855,9 +855,13 @@ struct SessionChatView: View {
             timestamp: Date()
         )
         // Sending a message always pins to bottom — the user expects to see their own message.
+        // Use absolute scrollToBottom (not preservePinnedBottom) because the new message
+        // is appended at the end and LazyVStack won't render it until we scroll there.
         isPinnedToBottom = true
         newMessageCount = 0
-        prepareForMessageListChange()
+        shouldAutoScrollOnNextLayout = true
+        pendingPinnedScroll = true
+        pendingPinnedDocumentHeight = nil  // nil → forces scrollToBottom path, not preservePinnedBottom
         animatedAppearanceMessageIDs = hasCompletedInitialScroll ? [pendingMessage.id] : []
         pendingUserMessages.append(pendingMessage)
         Task { @MainActor in
