@@ -81,6 +81,7 @@ private final class HoverBlockingContainerView<Content: View>: NSView {
     let hostingView: NotchHostingView<Content>
     let appState: AppState
     private var blockingTrackingArea: NSTrackingArea?
+    private var isHandlingMouseDown = false
 
     init(hostingView: NotchHostingView<Content>, appState: AppState) {
         self.hostingView = hostingView
@@ -149,6 +150,13 @@ private final class HoverBlockingContainerView<Content: View>: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard !isHandlingMouseDown else {
+            super.mouseDown(with: event)
+            return
+        }
+        isHandlingMouseDown = true
+        defer { isHandlingMouseDown = false }
+
         if shouldInterceptChatBack(at: event.locationInWindow) {
             withAnimation(NotchAnimation.open) {
                 appState.surface = .sessionList

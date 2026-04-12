@@ -40,7 +40,6 @@ struct SessionChatView: View {
     @State private var pendingPinnedScroll = false
     @State private var isPerformingProgrammaticScroll = false
     @State private var programmaticScrollResetTask: Task<Void, Never>?
-    @State private var pendingPinnedDocumentHeight: CGFloat?
     @State private var animatedAppearanceMessageIDs: Set<String> = []
     @StateObject private var scrollController = SessionChatScrollController()
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
@@ -104,7 +103,6 @@ struct SessionChatView: View {
             newMessageCount = 0
             shouldAutoScrollOnNextLayout = true
             pendingPinnedScroll = false
-            pendingPinnedDocumentHeight = nil
             animatedAppearanceMessageIDs = []
             isPerformingProgrammaticScroll = false
             scheduleInitialContentRevealFallback()
@@ -232,6 +230,7 @@ struct SessionChatView: View {
             .textSelection(.disabled)
             .frame(maxHeight: chatMaxHeight)
             .opacity(hasRevealedInitialContent ? 1 : 0)
+            .animation(.easeIn(duration: 0.12), value: hasRevealedInitialContent)
             .onAppear {
                 scrollController.onNewMessagesTapped = {
                     scrollToBottom(with: proxy, delay: nil, verifyBottom: true)
@@ -260,8 +259,19 @@ struct SessionChatView: View {
             }
             .onChange(of: visibleMessages) { _, _ in
                 guard shouldAutoScrollOnNextLayout else { return }
-                if let previousDocumentHeight = pendingPinnedDocumentHeight, hasCompletedInitialScroll {
-                    preservePinnedBottom(with: proxy, previousDocumentHeight: previousDocumentHeight)
+                if hasCompletedInitialScroll {
+                    scrollToBottomTask?.cancel()
+                    scrollToBottomTask = Task { @MainActor in
+                        for _ in 0..<4 {
+                            try? await Task.sleep(for: .milliseconds(16))
+                            guard !Task.isCancelled else { return }
+                            performScrollToBottom(with: proxy)
+                            if scrollController.isAtBottom { break }
+                        }
+                        isPinnedToBottom = true
+                        pendingPinnedScroll = false
+                        shouldAutoScrollOnNextLayout = false
+                    }
                 } else {
                     scrollToBottom(with: proxy)
                 }
@@ -286,9 +296,6 @@ struct SessionChatView: View {
             }
             guard !Task.isCancelled else { return }
             performScrollToBottom(with: proxy)
-            if wasInitialPending {
-                revealInitialContent()
-            }
             if verifyBottom {
                 let reachedBottom = await confirmBottomPosition(with: proxy)
                 guard !Task.isCancelled else { return }
@@ -306,8 +313,6 @@ struct SessionChatView: View {
                 guard !Task.isCancelled else { return }
                 isPinnedToBottom = reachedBottom
             }
-
-            pendingPinnedDocumentHeight = nil
 
             pendingPinnedScroll = false
             shouldAutoScrollOnNextLayout = false
@@ -351,7 +356,7 @@ struct SessionChatView: View {
     private func scheduleInitialContentRevealFallback() {
         initialContentRevealTask?.cancel()
         initialContentRevealTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(250))
+            try? await Task.sleep(for: .milliseconds(800))
             guard !Task.isCancelled else { return }
             revealInitialContent()
         }
@@ -432,49 +437,6 @@ struct SessionChatView: View {
         performScrollToBottom(with: proxy)
     }
 
-    private func preservePinnedBottom(with proxy: ScrollViewProxy, previousDocumentHeight: CGFloat) {
-        // If a previous scroll task is still in-flight, its delta was never applied.
-        // Fall back to absolute scrollToBottom to avoid accumulating position drift.
-        let previousTaskPending = pendingPinnedScroll && scrollToBottomTask != nil
-        scrollToBottomTask?.cancel()
-
-        if previousTaskPending {
-            scrollToBottomTask = Task { @MainActor in
-                await Task.yield()
-                guard !Task.isCancelled else { return }
-                performScrollToBottom(with: proxy)
-                pendingPinnedDocumentHeight = nil
-                pendingPinnedScroll = false
-                shouldAutoScrollOnNextLayout = false
-            }
-            return
-        }
-
-        scrollToBottomTask = Task { @MainActor in
-            for delay in [0, 16, 32, 64] {
-                if delay > 0 {
-                    try? await Task.sleep(for: .milliseconds(delay))
-                } else {
-                    await Task.yield()
-                }
-                guard !Task.isCancelled else { return }
-                if scrollController.preservePinnedBottom(previousDocumentHeight: previousDocumentHeight) {
-                    pendingPinnedDocumentHeight = nil
-                    pendingPinnedScroll = false
-                    shouldAutoScrollOnNextLayout = false
-                    return
-                }
-            }
-
-            if !Task.isCancelled {
-                performScrollToBottom(with: proxy)
-            }
-            pendingPinnedDocumentHeight = nil
-            pendingPinnedScroll = false
-            shouldAutoScrollOnNextLayout = false
-        }
-    }
-
     private func performScrollToBottom(with proxy: ScrollViewProxy, preferAnchorScroll: Bool = false) {
         programmaticScrollResetTask?.cancel()
         isPerformingProgrammaticScroll = true
@@ -496,7 +458,6 @@ struct SessionChatView: View {
         let shouldStick = isPinnedToBottom || !hasCompletedInitialScroll
         shouldAutoScrollOnNextLayout = shouldStick
         pendingPinnedScroll = shouldStick
-        pendingPinnedDocumentHeight = shouldStick && hasCompletedInitialScroll ? scrollController.documentHeight : nil
     }
 
     private var chatMaxHeight: CGFloat {
@@ -850,13 +811,10 @@ struct SessionChatView: View {
             timestamp: Date()
         )
         // Sending a message always pins to bottom — the user expects to see their own message.
-        // Use absolute scrollToBottom (not preservePinnedBottom) because the new message
-        // is appended at the end and LazyVStack won't render it until we scroll there.
         isPinnedToBottom = true
         newMessageCount = 0
         shouldAutoScrollOnNextLayout = true
         pendingPinnedScroll = true
-        pendingPinnedDocumentHeight = nil  // nil → forces scrollToBottom path, not preservePinnedBottom
         animatedAppearanceMessageIDs = hasCompletedInitialScroll ? [pendingMessage.id] : []
         pendingUserMessages.append(pendingMessage)
         Task { @MainActor in
@@ -1064,8 +1022,7 @@ final class SessionChatScrollController: ObservableObject {
 
         let clipView = scrollView.contentView
         let maxY = max(0, newDocumentHeight - clipView.bounds.height)
-        var origin = clipView.bounds.origin
-        origin.y = min(max(0, origin.y + delta), maxY)
+        let origin = NSPoint(x: 0, y: maxY)
         clipView.scroll(to: origin)
         scrollView.reflectScrolledClipView(clipView)
         return true
@@ -1097,6 +1054,9 @@ private final class ScrollObserverView: NSView {
     private weak var observedScrollView: NSScrollView?
     private var boundsObserver: NSObjectProtocol?
     private var pendingAtBottom: Bool?
+    private var throttleWorkItem: DispatchWorkItem?
+    private var lastCallbackTime: CFAbsoluteTime = 0
+    private static let throttleInterval: TimeInterval = 0.12
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -1139,6 +1099,8 @@ private final class ScrollObserverView: NSView {
     }
 
     private func detach() {
+        throttleWorkItem?.cancel()
+        throttleWorkItem = nil
         if let boundsObserver {
             NotificationCenter.default.removeObserver(boundsObserver)
         }
@@ -1163,11 +1125,23 @@ private final class ScrollObserverView: NSView {
         let documentMaxY = scrollView.documentView?.bounds.maxY ?? 0
         let atBottom = visibleMaxY >= documentMaxY - SessionChatScrollController.bottomThreshold
         pendingAtBottom = atBottom
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            guard self.pendingAtBottom == atBottom else { return }
-            self.pendingAtBottom = nil
-            self.onScroll?(atBottom)
+        throttleWorkItem?.cancel()
+
+        let now = CFAbsoluteTimeGetCurrent()
+        if now - lastCallbackTime >= Self.throttleInterval {
+            lastCallbackTime = now
+            pendingAtBottom = nil
+            onScroll?(atBottom)
+        } else {
+            let remaining = Self.throttleInterval - (now - lastCallbackTime)
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self, let pending = self.pendingAtBottom else { return }
+                self.pendingAtBottom = nil
+                self.lastCallbackTime = CFAbsoluteTimeGetCurrent()
+                self.onScroll?(pending)
+            }
+            throttleWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + remaining, execute: workItem)
         }
     }
 }

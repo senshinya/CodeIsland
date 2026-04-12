@@ -72,9 +72,19 @@ enum ClaudeSessionReader {
                 if let contentArray = content as? [[String: Any]],
                    contentArray.first?["type"] as? String == "tool_result" { continue }
                 if let contentStr = content as? String {
-                    // Skip command messages and system injections
-                    if contentStr.contains("<command-name>") || contentStr.contains("<local-command") { continue }
+                    // Skip local commands and system injections
+                    if contentStr.contains("<local-command") { continue }
                     if contentStr.contains("<task-notification>") || contentStr.contains("<task_notification>") { continue }
+                    // For skill/command invocations, display command name + args
+                    if contentStr.contains("<command-name>") {
+                        let cmd = extractTagContent(contentStr, tag: "command-name") ?? ""
+                        let args = extractTagContent(contentStr, tag: "command-args")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        let displayText = args.isEmpty ? cmd : "\(cmd) \(args)"
+                        if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            messages.append(SessionChatMessage(id: uuid, role: .user, text: displayText, timestamp: timestamp))
+                        }
+                        continue
+                    }
                     // Skip system-reminder only messages
                     if contentStr.hasPrefix("<system-reminder>") && !contentStr.contains("</system-reminder>\n") { continue }
 
@@ -147,6 +157,14 @@ enum ClaudeSessionReader {
         }
 
         return messages
+    }
+
+    /// Extract text content between `<tag>…</tag>`.
+    private static func extractTagContent(_ text: String, tag: String) -> String? {
+        guard let openRange = text.range(of: "<\(tag)>"),
+              let closeRange = text.range(of: "</\(tag)>"),
+              openRange.upperBound < closeRange.lowerBound else { return nil }
+        return String(text[openRange.upperBound..<closeRange.lowerBound])
     }
 
     /// Strip XML/HTML-like tags from text
