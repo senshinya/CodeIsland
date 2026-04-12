@@ -140,7 +140,7 @@ struct TerminalVisibilityDetector {
         let dirName = escapeAppleScript((cwd as NSString).lastPathComponent)
         // Also require the session's source keyword in the title to reduce false positives
         // when multiple CLI tools run in the same project directory
-        let sourceKeyword = escapeAppleScript(session.source ?? "claude")
+        let sourceKeyword = escapeAppleScript(session.source)
         let script = """
         tell application "System Events"
             tell process "Ghostty"

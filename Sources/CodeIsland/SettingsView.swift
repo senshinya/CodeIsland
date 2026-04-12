@@ -162,12 +162,6 @@ private struct GeneralPage: View {
                     ForEach(Array(NSScreen.screens.enumerated()), id: \.offset) { index, screen in
                         let name = screen.localizedName
                         let isBuiltin = name.contains("Built-in") || name.contains("内置")
-                        let hasNotch: Bool = {
-                            if #available(macOS 12.0, *) {
-                                return screen.auxiliaryTopLeftArea != nil
-                            }
-                            return false
-                        }()
                         let label = isBuiltin ? l10n["builtin_display"] : name
                         Text(label).tag("screen_\(index)")
                     }
