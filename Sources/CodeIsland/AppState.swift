@@ -1285,16 +1285,7 @@ final class AppState {
         }
         pending.continuation.resume(returning: responseData)
         let sessionId = pending.event.sessionId ?? "default"
-        if pending.isFromPermission {
-            sessions[sessionId]?.status = .idle
-            sessions[sessionId]?.currentTool = nil
-            sessions[sessionId]?.toolDescription = nil
-            if activeSessionId == sessionId {
-                activeSessionId = mostActiveSessionId()
-            }
-        } else {
-            sessions[sessionId]?.status = .processing
-        }
+        sessions[sessionId]?.status = .processing
 
         showNextPending()
         refreshDerivedState()
