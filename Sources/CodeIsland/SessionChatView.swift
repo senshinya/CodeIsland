@@ -134,7 +134,7 @@ struct SessionChatView: View {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(.white.opacity(0.45))
-                    SessionStatusDot(status: session.status)
+                    MascotView(source: session.source, status: session.status, size: 20)
                     Text(session.sessionLabel ?? session.projectDisplayName)
                         .font(.system(size: fontSize + 2, weight: .semibold, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.84))
@@ -1069,52 +1069,6 @@ final class SessionChatScrollController: ObservableObject {
         clipView.scroll(to: origin)
         scrollView.reflectScrolledClipView(clipView)
         return true
-    }
-}
-
-// MARK: - Session Status Dot
-
-/// Small pulsing dot indicating session status in the chat header.
-private struct SessionStatusDot: View {
-    let status: AgentStatus
-    @State private var pulse = false
-
-    private var color: Color {
-        switch status {
-        case .processing, .running:
-            return Color(red: 0.3, green: 0.85, blue: 0.4)
-        case .waitingApproval, .waitingQuestion:
-            return Color(red: 1.0, green: 0.6, blue: 0.2)
-        case .idle:
-            return .white.opacity(0.3)
-        }
-    }
-
-    private var shouldPulse: Bool {
-        status == .processing || status == .running
-    }
-
-    var body: some View {
-        Circle()
-            .fill(color)
-            .frame(width: 6, height: 6)
-            .scaleEffect(shouldPulse && pulse ? 1.4 : 1.0)
-            .opacity(shouldPulse && pulse ? 0.6 : 1.0)
-            .animation(
-                shouldPulse
-                    ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
-                    : .default,
-                value: pulse
-            )
-            .onChange(of: status) { _, _ in
-                pulse = false
-                if shouldPulse {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { pulse = true }
-                }
-            }
-            .onAppear {
-                if shouldPulse { pulse = true }
-            }
     }
 }
 
