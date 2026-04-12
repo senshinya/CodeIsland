@@ -305,7 +305,7 @@ final class L10n: ObservableObject {
         "unlimited": "不限制",
         "show_agent_details": "显示代理活动详情",
         "show_tool_status": "紧凑栏显示工具调用详情",
-        "expanded_usage_display": "展开栏展示订阅用量",
+        "expanded_usage_display": "显示订阅用量",
         "none": "无",
         "claude": "Claude",
         "codex": "Codex",

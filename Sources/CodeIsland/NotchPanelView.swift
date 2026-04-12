@@ -19,6 +19,8 @@ struct NotchPanelView: View {
     @AppStorage(SettingsKey.collapsedWidthPreview) private var collapsedWidthPreview = ""
     @AppStorage(SettingsKey.expandedWidth) private var expandedWidth = SettingsDefaults.expandedWidth
     @AppStorage(SettingsKey.collapsedHeightOffset) private var collapsedHeightOffset = SettingsDefaults.collapsedHeightOffset
+    @ObservedObject private var usageTracker = UsageTracker.shared
+    @ObservedObject private var codexUsageTracker = CodexUsageTracker.shared
 
     /// Delayed hover: prevents accidental expansion when mouse passes through
     @State private var hoverTimer: Timer?
@@ -45,6 +47,14 @@ struct NotchPanelView: View {
     private var expandedUsageDisplay: ExpandedUsageDisplayMode {
         ExpandedUsageDisplayMode(rawValue: expandedUsageDisplayRaw) ?? SettingsManager.shared.expandedUsageDisplay
     }
+    /// Whether usage data is actually available for display
+    private var idleUsageAvailable: Bool {
+        switch expandedUsageDisplay {
+        case .claude: return usageTracker.isAvailable
+        case .codex: return codexUsageTracker.isAvailable
+        case .none: return false
+        }
+    }
 
     /// Mascot size — fits within the menu bar height
     private var mascotSize: CGFloat { min(27, notchHeight - 6) }
@@ -69,6 +79,11 @@ struct NotchPanelView: View {
     /// Total panel width — adapts based on state and screen geometry
     private var panelWidth: CGFloat {
         if showIdleIndicator {
+            // When hovered with usage data available, use expanded width so usage bar fits
+            if idleHovered && idleUsageAvailable {
+                let w = expandedWidth > 0 ? CGFloat(expandedWidth) : CGFloat(SettingsDefaults.expandedWidth)
+                return min(w, screenWidth - 40)
+            }
             let base = idleHovered ? notchW + compactWingWidth * 2 + 80 : notchW + compactWingWidth * 2
             return max(notchW, base + activeCollapsedWidthOffset)
         }
@@ -196,6 +211,7 @@ struct NotchPanelView: View {
                 }
             }
             .frame(width: panelWidth)
+            .animation(NotchAnimation.micro, value: idleUsageAvailable)
             .clipped()
             .background(
                 NotchPanelShape(
@@ -783,19 +799,51 @@ private struct IdleIndicatorBar: View {
     let hovered: Bool
     @ObservedObject private var l10n = L10n.shared
     @AppStorage(SettingsKey.soundEnabled) private var soundEnabled = SettingsDefaults.soundEnabled
+    @AppStorage(SettingsKey.expandedUsageDisplay) private var expandedUsageDisplayRaw = SettingsDefaults.expandedUsageDisplay
+    @ObservedObject private var usageTracker = UsageTracker.shared
+    @ObservedObject private var codexUsageTracker = CodexUsageTracker.shared
+
+    private var expandedUsageDisplay: ExpandedUsageDisplayMode {
+        ExpandedUsageDisplayMode(rawValue: expandedUsageDisplayRaw) ?? .none
+    }
+
+    /// Whether usage info is available to display
+    private var showUsage: Bool {
+        switch expandedUsageDisplay {
+        case .claude: return usageTracker.isAvailable
+        case .codex: return codexUsageTracker.isAvailable
+        case .none: return false
+        }
+    }
+
+    /// Mascot source: follow usage display mode, default to claude
+    private var mascotSource: String {
+        switch expandedUsageDisplay {
+        case .codex: return "codex"
+        default: return "claude"
+        }
+    }
 
     var body: some View {
         HStack(spacing: 0) {
-            // Left: mascot
+            // Left: mascot + usage info
             HStack(spacing: 6) {
-                MascotView(source: "claude", status: .idle, size: mascotSize)
+                MascotView(source: mascotSource, status: .idle, size: mascotSize)
                     .opacity(hovered ? 0.9 : 0.5)
+
+                if hovered && showUsage {
+                    if expandedUsageDisplay == .claude {
+                        UsageInfoBar(data: usageTracker.data)
+                    } else if expandedUsageDisplay == .codex {
+                        CodexUsageInfoBar(data: codexUsageTracker.data)
+                    }
+                }
             }
             .padding(.leading, 10)
 
             Spacer(minLength: hasNotch ? notchW : 0)
 
-            // Right: expanded shows text + buttons, collapsed shows nothing
+            // Right: hovered shows session count + buttons
             if hovered {
                 HStack(spacing: 8) {
                     Text("0")
