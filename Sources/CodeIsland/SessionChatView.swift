@@ -231,15 +231,31 @@ struct SessionChatView: View {
             .textSelection(.disabled)
             .frame(maxHeight: chatMaxHeight)
             .opacity(hasRevealedInitialContent ? 1 : 0)
-            .overlay(alignment: .bottom) {
-                if shouldShowNewMessagesButton {
-                    newMessagesButton(with: proxy)
-                        .padding(.bottom, 16)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+            .onAppear {
+                scrollController.onNewMessagesTapped = {
+                    scrollToBottom(with: proxy, delay: nil, verifyBottom: true)
+                }
+                scrollToBottom(with: proxy, isInitial: true)
+            }
+            .onChange(of: shouldShowNewMessagesButton) { _, show in
+                if show {
+                    scrollController.showNewMessagesButton(
+                        count: newMessageCount,
+                        accentColor: NSColor(newMessagesAccent),
+                        fontSize: fontSize
+                    )
+                } else {
+                    scrollController.hideNewMessagesButton()
                 }
             }
-            .onAppear {
-                scrollToBottom(with: proxy, isInitial: true)
+            .onChange(of: newMessageCount) { _, count in
+                if shouldShowNewMessagesButton {
+                    scrollController.showNewMessagesButton(
+                        count: count,
+                        accentColor: NSColor(newMessagesAccent),
+                        fontSize: fontSize
+                    )
+                }
             }
             .onChange(of: visibleMessages) { _, _ in
                 guard shouldAutoScrollOnNextLayout else { return }
@@ -491,27 +507,6 @@ struct SessionChatView: View {
         hasCompletedInitialScroll && !isPinnedToBottom && newMessageCount > 0
     }
 
-    private func newMessagesButton(with proxy: ScrollViewProxy) -> some View {
-        Button {
-            scrollToBottom(with: proxy, delay: nil, verifyBottom: true)
-        } label: {
-            Text(String(format: L10n.shared["chat_new_messages_count"], newMessageCount))
-                .font(.system(size: fontSize, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.96))
-                .padding(.horizontal, 16)
-                .padding(.vertical, 9)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(.black.opacity(0.78))
-                        .overlay(
-                            Capsule(style: .continuous)
-                                .strokeBorder(newMessagesAccent.opacity(0.55), lineWidth: 1)
-                        )
-                        .shadow(color: .black.opacity(0.22), radius: 12, y: 5)
-                )
-        }
-        .buttonStyle(.plain)
-    }
 
     // MARK: - Message Rows
 
@@ -974,6 +969,8 @@ final class SessionChatScrollController: ObservableObject {
     static let bottomThreshold: CGFloat = 24
 
     private weak var scrollView: NSScrollView?
+    private var floatingButton: NSButton?
+    var onNewMessagesTapped: (() -> Void)?
 
     var documentHeight: CGFloat? {
         scrollView?.documentView?.bounds.height
@@ -989,6 +986,62 @@ final class SessionChatScrollController: ObservableObject {
     func attach(_ scrollView: NSScrollView) {
         self.scrollView = scrollView
     }
+
+    // MARK: - Floating "new messages" button (AppKit-native)
+    // SwiftUI buttons in overlays don't receive clicks in this borderless panel
+    // because hitTest returns NotchHostingView (not the button's backing view).
+    // An AppKit NSButton added via addFloatingSubview IS returned by hitTest,
+    // and HoverBlockingContainerView.mouseDown forwards the event to it.
+
+    func showNewMessagesButton(count: Int, accentColor: NSColor, fontSize: CGFloat) {
+        guard let scrollView else { return }
+
+        if floatingButton == nil {
+            let btn = NSButton()
+            btn.bezelStyle = .recessed
+            btn.isBordered = false
+            btn.wantsLayer = true
+            btn.target = self
+            btn.action = #selector(floatingButtonTapped)
+            btn.layer?.cornerRadius = 17
+            scrollView.addFloatingSubview(btn, for: .vertical)
+            floatingButton = btn
+        }
+
+        guard let btn = floatingButton else { return }
+        let title = String(format: L10n.shared["chat_new_messages_count"], count)
+        let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .semibold)
+        let attrStr = NSAttributedString(
+            string: title,
+            attributes: [
+                .font: font,
+                .foregroundColor: NSColor.white.withAlphaComponent(0.96),
+            ]
+        )
+        btn.attributedTitle = attrStr
+        btn.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.78).cgColor
+        btn.layer?.borderColor = accentColor.withAlphaComponent(0.55).cgColor
+        btn.layer?.borderWidth = 1
+        btn.sizeToFit()
+        let btnSize = NSSize(width: btn.frame.width + 24, height: 34)
+        let scrollBounds = scrollView.bounds
+        btn.frame = NSRect(
+            x: (scrollBounds.width - btnSize.width) / 2,
+            y: scrollBounds.height - btnSize.height - 16,
+            width: btnSize.width,
+            height: btnSize.height
+        )
+        btn.isHidden = false
+    }
+
+    func hideNewMessagesButton() {
+        floatingButton?.isHidden = true
+    }
+
+    @objc private func floatingButtonTapped() {
+        onNewMessagesTapped?()
+    }
+
 
     @discardableResult
     func scrollToBottom() -> Bool {

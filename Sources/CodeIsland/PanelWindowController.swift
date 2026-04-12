@@ -19,10 +19,6 @@ private class NotchHostingView<Content: View>: NSHostingView<Content> {
     private var applyingDeferred = false
 
     override func mouseDown(with event: NSEvent) {
-        let localPoint = convert(event.locationInWindow, from: nil)
-        let hitView = super.hitTest(localPoint)
-        let hitName = hitView.map { String(describing: type(of: $0)) } ?? "nil"
-        hostingLog.info("mouseDown location=(\(event.locationInWindow.x, privacy: .public), \(event.locationInWindow.y, privacy: .public)) local=(\(localPoint.x, privacy: .public), \(localPoint.y, privacy: .public)) windowIsKey=\(self.window?.isKeyWindow == true, privacy: .public) hit=\(hitName, privacy: .public)")
         window?.makeKey()
         super.mouseDown(with: event)
     }
@@ -154,13 +150,20 @@ private final class HoverBlockingContainerView<Content: View>: NSView {
 
     override func mouseDown(with event: NSEvent) {
         if shouldInterceptChatBack(at: event.locationInWindow) {
-            hostingLog.info("Intercepted chat back click at container level")
             withAnimation(NotchAnimation.open) {
                 appState.surface = .sessionList
             }
             return
         }
-        super.mouseDown(with: event)
+        // Borderless NSPanel sends all mouseDown to the content view.
+        // Forward to the actual hit-tested view so AppKit controls
+        // (NSButton, NSTextField, etc.) receive events correctly.
+        let localPt = convert(event.locationInWindow, from: nil)
+        if let hitView = hitTest(localPt), hitView !== self, hitView !== hostingView {
+            hitView.mouseDown(with: event)
+        } else {
+            super.mouseDown(with: event)
+        }
     }
 
     private func shouldInterceptChatBack(at windowPoint: NSPoint) -> Bool {
