@@ -61,6 +61,11 @@ final class AppStateQuestionFlowTests: XCTestCase {
 
     func testSkipAskUserQuestionReturnsDeny() async throws {
         let appState = AppState()
+        appState.sessions["s-skip"] = SessionSnapshot()
+        appState.sessions["s-skip"]?.status = .waitingQuestion
+        appState.sessions["s-skip"]?.currentTool = "AskUserQuestion"
+        appState.sessions["s-skip"]?.toolDescription = "Prompt"
+        appState.activeSessionId = "s-skip"
         let event = try makeAskUserQuestionEvent(
             sessionId: "s-skip",
             questions: [
@@ -81,6 +86,9 @@ final class AppStateQuestionFlowTests: XCTestCase {
         let behavior = try extractPermissionBehavior(from: responseData)
         XCTAssertEqual(behavior, "deny")
         XCTAssertEqual(appState.questionQueue.count, 0)
+        XCTAssertEqual(appState.sessions["s-skip"]?.status, .idle)
+        XCTAssertNil(appState.sessions["s-skip"]?.currentTool)
+        XCTAssertNil(appState.sessions["s-skip"]?.toolDescription)
     }
 
     func testDisconnectDuringAskUserQuestionReturnsDeny() async throws {

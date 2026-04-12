@@ -181,30 +181,12 @@ final class L10n: ObservableObject {
 
         // Menu
         "settings_ellipsis": "Settings...",
-        "check_for_updates": "Check for Updates...",
         "export_diagnostics": "Export Diagnostics...",
         "export_diagnostics_desc": "Create a zip with logs, settings and session state for bug reports",
         "reinstall_hooks": "Reinstall Hooks",
         "remove_hooks": "Remove Hooks",
         "quit": "Quit",
-
-        // Update
-        "update_available_title": "Update Available",
-        "update_available_body": "CodeIsland %@ is available (current: %@). Would you like to download it?",
-        "download_update": "Download",
-        "later": "Later",
-        "no_update_title": "Up to Date",
-        "no_update_body": "CodeIsland %@ is the latest version.",
         "ok": "OK",
-        "update_now": "Update Now",
-        "update_downloading": "Downloading update...",
-        "update_failed_title": "Update Failed",
-        "update_failed_body": "Could not install the update: %@",
-        "update_manual_download": "Download Manually",
-        "update_homebrew_title": "Update Available",
-        "update_homebrew_body": "CodeIsland %@ is available. Since you installed via Homebrew, please run:",
-        "update_homebrew_command": "brew upgrade codeisland",
-        "update_copy_command": "Copy Command",
 
         // NotchPanel
         "mute": "Mute",
@@ -390,30 +372,12 @@ final class L10n: ObservableObject {
 
         // Menu
         "settings_ellipsis": "设置...",
-        "check_for_updates": "检查更新...",
         "export_diagnostics": "导出诊断信息...",
         "export_diagnostics_desc": "创建包含日志、设置和会话状态的 zip 文件，用于反馈 Bug",
         "reinstall_hooks": "重新安装 Hooks",
         "remove_hooks": "卸载 Hooks",
         "quit": "退出",
-
-        // Update
-        "update_available_title": "发现新版本",
-        "update_available_body": "CodeIsland %@ 已发布（当前版本：%@），是否前往下载？",
-        "download_update": "前往下载",
-        "later": "稍后",
-        "no_update_title": "已是最新版本",
-        "no_update_body": "CodeIsland %@ 已是最新版本。",
         "ok": "好",
-        "update_now": "立即更新",
-        "update_downloading": "正在下载更新...",
-        "update_failed_title": "更新失败",
-        "update_failed_body": "无法安装更新：%@",
-        "update_manual_download": "手动下载",
-        "update_homebrew_title": "发现新版本",
-        "update_homebrew_body": "CodeIsland %@ 已发布。由于您通过 Homebrew 安装，请运行：",
-        "update_homebrew_command": "brew upgrade codeisland",
-        "update_copy_command": "复制命令",
 
         // NotchPanel
         "mute": "静音",

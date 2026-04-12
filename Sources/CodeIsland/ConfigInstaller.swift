@@ -327,7 +327,15 @@ struct ConfigInstaller {
 
     /// Detect installed Claude Code version by running `claude --version`
     private static var cachedClaudeVersion: String?
+    private static var claudeVersionOverride: String?
+
+    static func setClaudeVersionOverride(_ version: String?) {
+        claudeVersionOverride = version
+        cachedClaudeVersion = nil
+    }
+
     private static func detectClaudeVersion() -> String? {
+        if let override = claudeVersionOverride { return override }
         if let cached = cachedClaudeVersion { return cached }
         // Find claude binary — GUI apps don't inherit user's shell PATH
         let candidates = [
@@ -372,7 +380,7 @@ struct ConfigInstaller {
     }
 
     /// Filter events based on installed CLI version
-    private static func compatibleEvents(for cli: CLIConfig) -> [(String, Int, Bool)] {
+    static func compatibleEvents(for cli: CLIConfig) -> [(String, Int, Bool)] {
         guard !cli.versionedEvents.isEmpty else { return cli.events }
 
         // Only Claude Code needs version checking for now
@@ -561,11 +569,12 @@ struct ConfigInstaller {
         return cleaned
     }
 
-    private static func isHooksInstalled(for cli: CLIConfig, fm: FileManager) -> Bool {
+    static func isHooksInstalled(for cli: CLIConfig, fm: FileManager) -> Bool {
         guard let root = parseJSONFile(at: cli.fullPath, fm: fm),
               let hooks = root[cli.configKey] as? [String: Any] else { return false }
-        // Check that ALL required events have our hook installed, not just any one
-        let allPresent = cli.events.allSatisfy { (event, _, _) in
+        let requiredEvents = compatibleEvents(for: cli)
+        // Check that ALL compatible required events have our hook installed, not just any one
+        let allPresent = requiredEvents.allSatisfy { (event, _, _) in
             guard let entries = hooks[event] as? [[String: Any]] else { return false }
             return entries.contains { containsOurHook($0) }
         }

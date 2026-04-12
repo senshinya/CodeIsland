@@ -70,12 +70,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         #endif
 
-        // Auto update check disabled for custom build
-        // Task { @MainActor in
-        //     try? await Task.sleep(nanoseconds: 5_000_000_000)
-        //     UpdateChecker.shared.checkForUpdates(silent: true)
-        // }
-
         SoundManager.shared.playBoot()
         setupGlobalShortcut()
 
