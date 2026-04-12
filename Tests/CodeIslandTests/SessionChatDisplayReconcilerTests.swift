@@ -50,9 +50,35 @@ final class SessionChatDisplayReconcilerTests: XCTestCase {
         XCTAssertFalse(SessionChatView.SessionMessageBarSupport.canShow(for: session))
     }
 
-    func testMessageBarStaysHiddenForNonClaudeSessions() {
+    func testMessageBarIsAvailableForCodexWithTmux() {
         var session = SessionSnapshot()
         session.source = "codex"
+        session.tmuxPane = "%1"
+
+        XCTAssertTrue(SessionChatView.SessionMessageBarSupport.canShow(for: session))
+    }
+
+    func testMessageBarIsAvailableForCodexInGhosttyWithTTY() {
+        var session = SessionSnapshot()
+        session.source = "codex"
+        session.termBundleId = "com.mitchellh.ghostty"
+        session.ttyPath = "/dev/ttys001"
+
+        XCTAssertTrue(SessionChatView.SessionMessageBarSupport.canShow(for: session))
+    }
+
+    func testMessageBarStaysHiddenForCodexInUnsupportedTerminal() {
+        var session = SessionSnapshot()
+        session.source = "codex"
+        session.termBundleId = "com.googlecode.iterm2"
+        session.itermSessionId = "w0t0p0:1234-5678"
+
+        XCTAssertFalse(SessionChatView.SessionMessageBarSupport.canShow(for: session))
+    }
+
+    func testMessageBarStaysHiddenForUnsupportedSessions() {
+        var session = SessionSnapshot()
+        session.source = "other"
         session.tmuxPane = "%1"
 
         XCTAssertFalse(SessionChatView.SessionMessageBarSupport.canShow(for: session))

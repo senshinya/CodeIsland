@@ -1420,7 +1420,7 @@ enum MessageSender {
     }
 
     static func supportedTransport(for session: SessionSnapshot) -> Transport? {
-        guard session.isClaude else { return nil }
+        guard session.isClaude || session.isCodex else { return nil }
         if let pane = session.tmuxPane?.trimmingCharacters(in: .whitespacesAndNewlines),
            !pane.isEmpty {
             return .tmux(pane: pane, tmuxEnv: session.tmuxEnv)
