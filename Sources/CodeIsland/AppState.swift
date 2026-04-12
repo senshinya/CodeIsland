@@ -535,6 +535,8 @@ final class AppState {
     }
 
     private func enqueueCompletion(_ sessionId: String) {
+        // User is already viewing this session's chat — no need to notify
+        if case .chatHistory(let sid) = _surface, sid == sessionId { return }
         // Don't queue duplicates
         if completionQueue.contains(sessionId) || justCompletedSessionId == sessionId { return }
 

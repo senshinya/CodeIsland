@@ -1583,12 +1583,13 @@ private struct CompletionCardContent: View {
 
     var body: some View {
         if let session = completionSession, let sessionId = completionSessionId {
-            // Flat layout: SessionCard + accessories as siblings in one VStack
+            // Unified card: SessionCard + accessories share one background
             VStack(spacing: 0) {
                 SessionCard(
                     sessionId: sessionId,
                     session: session,
                     isCompletion: true,
+                    embeddedInContainer: true,
                     onChat: (session.isClaude || session.isCodex) ? {
                         withAnimation(NotchAnimation.open) {
                             appState.cancelCompletionQueue()
@@ -1641,6 +1642,11 @@ private struct CompletionCardContent: View {
                     )
                 }
             }
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(0.05))
+            )
+            .padding(.horizontal, 6)
             .padding(.vertical, 4)
 
             // Expand to show all sessions
