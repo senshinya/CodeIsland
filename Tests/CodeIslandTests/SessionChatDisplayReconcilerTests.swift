@@ -1,7 +1,63 @@
 import XCTest
 @testable import CodeIsland
+@testable import CodeIslandCore
 
 final class SessionChatDisplayReconcilerTests: XCTestCase {
+    func testMessageBarIsAvailableForClaudeWithoutTmux() {
+        var session = SessionSnapshot()
+        session.source = "claude"
+        session.tmuxPane = nil
+
+        XCTAssertFalse(SessionChatView.SessionMessageBarSupport.canShow(for: session))
+    }
+
+    func testMessageBarIsAvailableForClaudeWithTmux() {
+        var session = SessionSnapshot()
+        session.source = "claude"
+        session.tmuxPane = "%1"
+
+        XCTAssertTrue(SessionChatView.SessionMessageBarSupport.canShow(for: session))
+    }
+
+    func testMessageBarIsAvailableForClaudeInGhosttyWithTTY() {
+        var session = SessionSnapshot()
+        session.source = "claude"
+        session.termBundleId = "com.mitchellh.ghostty"
+        session.ttyPath = "/dev/ttys001"
+
+        XCTAssertTrue(SessionChatView.SessionMessageBarSupport.canShow(for: session))
+    }
+
+    func testMessageBarPrefersTmuxOverGhosttyWhenBothAreAvailable() {
+        var session = SessionSnapshot()
+        session.source = "claude"
+        session.tmuxPane = "%1"
+        session.termBundleId = "com.mitchellh.ghostty"
+        session.ttyPath = "/dev/ttys001"
+
+        guard case let .tmux(pane, _) = MessageSender.supportedTransport(for: session) else {
+            return XCTFail("Expected tmux transport to take priority")
+        }
+        XCTAssertEqual(pane, "%1")
+    }
+
+    func testMessageBarStaysHiddenForClaudeInUnsupportedTerminal() {
+        var session = SessionSnapshot()
+        session.source = "claude"
+        session.termBundleId = "com.googlecode.iterm2"
+        session.itermSessionId = "w0t0p0:1234-5678"
+
+        XCTAssertFalse(SessionChatView.SessionMessageBarSupport.canShow(for: session))
+    }
+
+    func testMessageBarStaysHiddenForNonClaudeSessions() {
+        var session = SessionSnapshot()
+        session.source = "codex"
+        session.tmuxPane = "%1"
+
+        XCTAssertFalse(SessionChatView.SessionMessageBarSupport.canShow(for: session))
+    }
+
     func testMatchedPendingUserMessageReusesPendingDisplayID() {
         let pending = SessionChatMessage(
             id: "pending-user-1",

@@ -684,7 +684,8 @@ final class AppState {
         }
 
         if case .completionCard = surface {
-            showNextCompletionOrCollapse()
+            completionAutoCollapseDeadline = Date().addingTimeInterval(5)
+            scheduleCompletionAutoCollapse(after: 5)
         }
     }
 

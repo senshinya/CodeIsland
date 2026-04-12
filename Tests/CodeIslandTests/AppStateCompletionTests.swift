@@ -23,7 +23,7 @@ final class AppStateCompletionTests: XCTestCase {
         XCTAssertNil(appState.sessions[sessionId])
     }
 
-    func testCompletionMessageSubmitCollapsesImmediatelyWithoutQueuedItems() {
+    func testCompletionMessageSubmitKeepsCompletionCardVisibleAndResetsAutoCollapse() {
         let appState = AppState()
         let sessionId = "s-complete"
 
@@ -34,9 +34,10 @@ final class AppStateCompletionTests: XCTestCase {
         appState.completeCompletionMessageSubmission()
 
         XCTAssertFalse(appState.isMessageInputFocused)
-        if case .collapsed = appState.surface {
+        if case .completionCard(let visibleSessionId) = appState.surface {
+            XCTAssertEqual(visibleSessionId, sessionId)
         } else {
-            XCTFail("Expected completion card to collapse immediately after sending")
+            XCTFail("Expected completion card to stay visible after sending")
         }
     }
 }

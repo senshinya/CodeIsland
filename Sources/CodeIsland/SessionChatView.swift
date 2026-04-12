@@ -1,6 +1,9 @@
 import SwiftUI
 import CodeIslandCore
 import Darwin
+import os.log
+
+private let messageLog = Logger(subsystem: "com.codeisland", category: "MessageSender")
 
 /// Chat history view for a supported CLI session.
 struct SessionChatView: View {
@@ -863,17 +866,13 @@ struct SessionChatView: View {
             }
         }
         Task.detached {
-            await MessageSender.send(text, to: session)
+            await MessageSender.send(text, to: session, sessionId: sessionId)
         }
-}
+    }
 
 enum SessionMessageBarSupport {
     static func canShow(for session: SessionSnapshot) -> Bool {
-        guard session.isClaude,
-              let pane = session.tmuxPane?.trimmingCharacters(in: .whitespacesAndNewlines) else {
-            return false
-        }
-        return !pane.isEmpty
+        MessageSender.supportedTransport(for: session) != nil
     }
 }
 
@@ -918,7 +917,9 @@ struct SessionMessageInputBar: View {
         }
         .onHover { _ in }
         .onDisappear {
-            onFocusChange?(false)
+            DispatchQueue.main.async {
+                onFocusChange?(false)
+            }
         }
     }
 
@@ -1039,6 +1040,7 @@ private final class ScrollObserverView: NSView {
 
     private weak var observedScrollView: NSScrollView?
     private var boundsObserver: NSObjectProtocol?
+    private var pendingAtBottom: Bool?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -1073,7 +1075,10 @@ private final class ScrollObserverView: NSView {
         ) { [weak self] _ in
             self?.notifyScrollPosition()
         }
-        onResolveScrollView?(scrollView)
+        DispatchQueue.main.async { [weak self, weak scrollView] in
+            guard let self, let scrollView, self.observedScrollView === scrollView else { return }
+            self.onResolveScrollView?(scrollView)
+        }
         notifyScrollPosition()
     }
 
@@ -1100,7 +1105,14 @@ private final class ScrollObserverView: NSView {
         guard let scrollView = observedScrollView else { return }
         let visibleMaxY = scrollView.contentView.documentVisibleRect.maxY
         let documentMaxY = scrollView.documentView?.bounds.maxY ?? 0
-        onScroll?(visibleMaxY >= documentMaxY - SessionChatScrollController.bottomThreshold)
+        let atBottom = visibleMaxY >= documentMaxY - SessionChatScrollController.bottomThreshold
+        pendingAtBottom = atBottom
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            guard self.pendingAtBottom == atBottom else { return }
+            self.pendingAtBottom = nil
+            self.onScroll?(atBottom)
+        }
     }
 }
 
@@ -1277,7 +1289,9 @@ private struct ChatInputEditor: NSViewRepresentable {
             textView.frame = NSRect(origin: .zero, size: scrollView.contentSize)
         }
         if textView.string != text {
+            context.coordinator.isApplyingExternalText = true
             textView.string = text
+            context.coordinator.isApplyingExternalText = false
             context.coordinator.updatePlaceholder()
         }
         context.coordinator.onSubmit = onSubmit
@@ -1304,6 +1318,7 @@ private struct ChatInputEditor: NSViewRepresentable {
         weak var textView: NSTextView?
         private var placeholderView: NSTextField?
         var lastFocusRequest: Int
+        var isApplyingExternalText = false
 
         init(_ parent: ChatInputEditor) {
             self.parent = parent
@@ -1314,7 +1329,13 @@ private struct ChatInputEditor: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? NSTextView else { return }
-            parent.text = tv.string
+            guard !isApplyingExternalText else {
+                updatePlaceholder()
+                return
+            }
+            DispatchQueue.main.async {
+                self.parent.text = tv.string
+            }
             updatePlaceholder()
         }
 
@@ -1371,7 +1392,9 @@ private final class ChatInputTextView: NSTextView {
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
         if accepted {
-            onFocusChange?(true)
+            DispatchQueue.main.async {
+                self.onFocusChange?(true)
+            }
         }
         return accepted
     }
@@ -1380,7 +1403,9 @@ private final class ChatInputTextView: NSTextView {
         let resigned = super.resignFirstResponder()
         if resigned {
             suppressAutomaticFocus = true
-            onFocusChange?(false)
+            DispatchQueue.main.async {
+                self.onFocusChange?(false)
+            }
         }
         return resigned
     }
@@ -1389,36 +1414,42 @@ private final class ChatInputTextView: NSTextView {
 // MARK: - Message Sender
 
 enum MessageSender {
-    static func send(_ text: String, to session: SessionSnapshot) async {
-        if let pane = session.tmuxPane, !pane.isEmpty {
-            await sendViaTmux(text, pane: pane, tmuxEnv: session.tmuxEnv)
-            return
-        }
-
-        let tty = resolveRealTTY(session: session)
-        if let tty, !tty.isEmpty {
-            sendViaTTY(text, tty: tty)
-        }
+    enum Transport {
+        case tmux(pane: String, tmuxEnv: String?)
+        case ghostty(tty: String?, cwd: String?)
     }
 
-    private static func resolveRealTTY(session: SessionSnapshot) -> String? {
-        if let tty = session.ttyPath, !tty.isEmpty, tty != "/dev/tty" {
-            return tty
+    static func supportedTransport(for session: SessionSnapshot) -> Transport? {
+        guard session.isClaude else { return nil }
+        if let pane = session.tmuxPane?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !pane.isEmpty {
+            return .tmux(pane: pane, tmuxEnv: session.tmuxEnv)
         }
-        guard let pid = session.cliPid, pid > 0 else { return session.ttyPath }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-p", "\(pid)", "-o", "tty="]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-        guard (try? process.run()) != nil else { return session.ttyPath }
-        process.waitUntilExit()
-        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if output.isEmpty { return session.ttyPath }
-        let devPath = output.hasPrefix("/dev/") ? output : "/dev/\(output)"
-        return devPath
+        let tty = resolvedTTYPath(session: session)
+        let cwd = trimmedNonEmpty(session.cwd)
+        let termBundleId = session.termBundleId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let termApp = session.termApp?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        if termBundleId == "com.mitchellh.ghostty" || termApp == "ghostty" {
+            if tty != nil || cwd != nil {
+                return .ghostty(tty: tty, cwd: cwd)
+            }
+        }
+        return nil
+    }
+
+    static func send(_ text: String, to session: SessionSnapshot, sessionId: String? = nil) async {
+        switch supportedTransport(for: session) {
+        case let .tmux(pane, tmuxEnv):
+            messageLog.info("send transport=tmux pane=\(pane, privacy: .public)")
+            await sendViaTmux(text, pane: pane, tmuxEnv: tmuxEnv)
+        case let .ghostty(tty, cwd):
+            messageLog.info("send transport=ghostty sessionId=\((sessionId ?? "-"), privacy: .public) tty=\((tty ?? "-"), privacy: .public) cwd=\((cwd ?? "-"), privacy: .public)")
+            await sendViaGhostty(text, tty: tty, cwd: cwd, sessionId: sessionId)
+        case nil:
+            messageLog.warning("send transport=none source=\(session.source, privacy: .public)")
+            return
+        }
     }
 
     private static func sendViaTmux(_ text: String, pane: String, tmuxEnv: String?) async {
@@ -1427,17 +1458,100 @@ enum MessageSender {
             let args = ["-S", String(socketPath), "send-keys", "-t", pane, "-l", text]
             _ = try? await shellRun(tmux, args: args)
             _ = try? await shellRun(tmux, args: ["-S", String(socketPath), "send-keys", "-t", pane, "Enter"])
+            messageLog.info("tmux send completed via socket pane=\(pane, privacy: .public)")
             return
         }
         _ = try? await shellRun(tmux, args: ["send-keys", "-t", pane, "-l", text])
         _ = try? await shellRun(tmux, args: ["send-keys", "-t", pane, "Enter"])
+        messageLog.info("tmux send completed pane=\(pane, privacy: .public)")
     }
 
-    private static func sendViaTTY(_ text: String, tty: String) {
-        guard let handle = FileHandle(forWritingAtPath: tty) else { return }
-        defer { handle.closeFile() }
-        if let data = (text + "\r").data(using: .utf8) {
-            handle.write(data)
+    private static func sendViaGhostty(_ text: String, tty: String?, cwd: String?, sessionId: String?) async {
+        let escapedText = escapeAppleScript(text)
+        let escapedTTY = escapeAppleScript(tty ?? "")
+        let trimmedCwd = (cwd ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let cwd1 = stripTrailingSlashes(trimmedCwd)
+        let cwd2 = stripTrailingSlashes(URL(fileURLWithPath: cwd1).resolvingSymlinksInPath().path)
+        let dirName = (cwd1 as NSString).lastPathComponent
+        let home = NSHomeDirectory()
+        let tildeCwd: String = {
+            if cwd1 == home { return "~" }
+            if cwd1.hasPrefix(home + "/") {
+                return "~" + String(cwd1.dropFirst(home.count))
+            }
+            return ""
+        }()
+        let escapedCwd1 = escapeAppleScript(cwd1)
+        let escapedCwd2 = escapeAppleScript(cwd2)
+        let escapedDirName = escapeAppleScript(dirName)
+        let escapedTildeCwd = escapeAppleScript(tildeCwd)
+        let escapedSessionIdPrefix = escapeAppleScript(String((sessionId ?? "").prefix(8)))
+        let script = """
+        tell application "Ghostty"
+            set targetTerm to missing value
+
+            if "\(escapedTTY)" is not "" then
+                try
+                    set ttyMatches to (every terminal whose tty is "\(escapedTTY)")
+                    if (count of ttyMatches) > 0 then
+                        set targetTerm to item 1 of ttyMatches
+                    end if
+                end try
+            end if
+
+            if targetTerm is missing value then
+                set matches to {}
+                if "\(escapedCwd1)" is not "" then
+                    try
+                        set matches to (every terminal whose working directory is "\(escapedCwd1)")
+                    end try
+                end if
+                if (count of matches) = 0 and "\(escapedCwd2)" is not "" and "\(escapedCwd2)" is not "\(escapedCwd1)" then
+                    try
+                        set matches to (every terminal whose working directory is "\(escapedCwd2)")
+                    end try
+                end if
+                if (count of matches) = 0 then
+                    repeat with t in terminals
+                        try
+                            set tname to (name of t as text)
+                            if ("\(escapedTildeCwd)" is not "" and tname contains "\(escapedTildeCwd)") or ("\(escapedCwd1)" is not "" and tname contains "\(escapedCwd1)") or ("\(escapedDirName)" is not "" and tname contains "\(escapedDirName)") then
+                                set end of matches to t
+                            end if
+                        end try
+                    end repeat
+                end if
+
+                if "\(escapedSessionIdPrefix)" is not "" then
+                    repeat with t in matches
+                        try
+                            if name of t contains "\(escapedSessionIdPrefix)" then
+                                set targetTerm to t
+                                exit repeat
+                            end if
+                        end try
+                    end repeat
+                end if
+
+                if targetTerm is missing value and (count of matches) > 0 then
+                    set targetTerm to item 1 of matches
+                end if
+            end if
+
+            if targetTerm is not missing value then
+                focus targetTerm
+                activate
+                input text "\(escapedText)" to targetTerm
+                delay 0.12
+                send key "enter" to targetTerm
+            end if
+        end tell
+        """
+        do {
+            _ = try await runOsaScript(script)
+            messageLog.info("ghostty osascript completed")
+        } catch {
+            messageLog.error("ghostty osascript failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -1458,6 +1572,87 @@ enum MessageSender {
         try process.run()
         process.waitUntilExit()
         return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    }
+
+    private static func runOsaScript(_ source: String) async throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", source]
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        try process.run()
+        process.waitUntilExit()
+        let out = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        if process.terminationStatus == 0 {
+            return out
+        }
+        throw OsaScriptError(stderr: err.isEmpty ? out : err, status: process.terminationStatus)
+    }
+
+    private static func escapeAppleScript(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    private static func trimmedNonEmpty(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+        return value
+    }
+
+    private static func stripTrailingSlashes(_ path: String) -> String {
+        var result = path
+        while result.count > 1, result.hasSuffix("/") {
+            result.removeLast()
+        }
+        return result
+    }
+
+    private static func normalizeTTYPath(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty,
+              value != "/dev/tty",
+              value != "tty" else { return nil }
+        if value.hasPrefix("/dev/") { return value }
+        if value.hasPrefix("tty") || value.hasPrefix("pts/") {
+            return "/dev/\(value)"
+        }
+        return value
+    }
+
+    private static func resolvedTTYPath(session: SessionSnapshot) -> String? {
+        if let normalized = normalizeTTYPath(session.ttyPath) {
+            return normalized
+        }
+        guard let pid = session.cliPid, pid > 0 else { return nil }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-p", "\(pid)", "-o", "tty="]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        guard (try? process.run()) != nil else { return nil }
+        process.waitUntilExit()
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !output.isEmpty, output != "??" else { return nil }
+        return normalizeTTYPath(output)
+    }
+
+    private struct OsaScriptError: LocalizedError {
+        let stderr: String
+        let status: Int32
+
+        var errorDescription: String? {
+            let trimmed = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                return "osascript exited with status \(status)"
+            }
+            return "osascript exited with status \(status): \(trimmed)"
+        }
     }
 }
 

@@ -1656,7 +1656,7 @@ private struct RetainedCompletionSessionCard: View {
                     onFocusChange: { appState.setMessageInputFocused($0) },
                     onSubmitText: { text in
                         Task.detached {
-                            await MessageSender.send(text, to: session)
+                            await MessageSender.send(text, to: session, sessionId: sessionId)
                         }
                         appState.completeCompletionMessageSubmission()
                     },
