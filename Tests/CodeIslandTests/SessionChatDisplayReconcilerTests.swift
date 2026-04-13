@@ -170,6 +170,20 @@ final class SessionChatDisplayReconcilerTests: XCTestCase {
         XCTAssertFalse(SessionChatView.SessionMessageBarSupport.canShow(for: session))
     }
 
+    func testRawTerminalSendBatchesKeepClaudeSingleShot() {
+        XCTAssertEqual(
+            MessageSender.rawTerminalSendBatches(text: "hello", source: "claude"),
+            ["hello\r"]
+        )
+    }
+
+    func testRawTerminalSendBatchesSplitCodexSubmit() {
+        XCTAssertEqual(
+            MessageSender.rawTerminalSendBatches(text: "hello", source: "codex"),
+            ["hello", "\r"]
+        )
+    }
+
     func testMessageBarStaysHiddenForUnsupportedSessions() {
         var session = SessionSnapshot()
         session.source = "other"

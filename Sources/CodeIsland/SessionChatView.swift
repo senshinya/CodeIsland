@@ -1795,7 +1795,7 @@ enum MessageSender {
             await sendViaTmux(text, pane: pane, tmuxEnv: tmuxEnv)
         case let .kaku(paneId, tty, cwd):
             messageLog.info("send transport=kaku paneId=\((paneId ?? "-"), privacy: .public) tty=\((tty ?? "-"), privacy: .public)")
-            await sendViaKaku(text, paneId: paneId, tty: tty, cwd: cwd)
+            await sendViaKaku(text, paneId: paneId, tty: tty, cwd: cwd, source: session.source)
         case let .ghostty(tty, cwd):
             messageLog.info("send transport=ghostty sessionId=\((sessionId ?? "-"), privacy: .public) tty=\((tty ?? "-"), privacy: .public) cwd=\((cwd ?? "-"), privacy: .public)")
             await sendViaGhostty(text, tty: tty, cwd: cwd, sessionId: sessionId)
@@ -1807,10 +1807,10 @@ enum MessageSender {
             await sendViaTerminalApp(text, tty: tty)
         case let .wezterm(tty, cwd):
             messageLog.info("send transport=wezterm tty=\((tty ?? "-"), privacy: .public) cwd=\((cwd ?? "-"), privacy: .public)")
-            await sendViaWezTerm(text, tty: tty, cwd: cwd)
+            await sendViaWezTerm(text, tty: tty, cwd: cwd, source: session.source)
         case let .kitty(windowId):
             messageLog.info("send transport=kitty windowId=\(windowId, privacy: .public)")
-            await sendViaKitty(text, windowId: windowId)
+            await sendViaKitty(text, windowId: windowId, source: session.source)
         case nil:
             messageLog.warning("send transport=none source=\(session.source, privacy: .public)")
             return
@@ -2109,7 +2109,7 @@ enum MessageSender {
         return nil
     }
 
-    private static func sendViaWezTerm(_ text: String, tty: String?, cwd: String?) async {
+    private static func sendViaWezTerm(_ text: String, tty: String?, cwd: String?, source: String) async {
         guard let wezterm = findWezTermBinary() else {
             messageLog.error("wezterm binary not found")
             return
@@ -2119,14 +2119,11 @@ enum MessageSender {
             return
         }
 
-        // Single-shot: --no-paste writes raw bytes to the pane's pty, so the trailing \r
-        // is delivered as a keypress rather than getting wrapped in bracketed-paste framing.
-        // Skips the two-step dance that bracketed-paste requires.
         do {
-            _ = try await shellRunWithStdin(
-                wezterm,
+            try await sendRawTextBatches(
+                via: wezterm,
                 args: ["cli", "send-text", "--pane-id", paneId, "--no-paste"],
-                stdin: text + "\r"
+                batches: rawTerminalSendBatches(text: text, source: source)
             )
         } catch {
             messageLog.error("wezterm send-text failed: \(error.localizedDescription, privacy: .public)")
@@ -2137,20 +2134,17 @@ enum MessageSender {
 
     // MARK: - kitty
 
-    private static func sendViaKitty(_ text: String, windowId: String) async {
+    private static func sendViaKitty(_ text: String, windowId: String, source: String) async {
         guard let kitten = findKittenBinary() else {
             messageLog.error("kitten binary not found")
             return
         }
 
-        // stdin form (matches kaku / wezterm): `kitten @ send-text --match id:<N> --stdin`
-        // reads the payload from stdin, which sidesteps argv size limits and keeps the
-        // message body out of `ps` output. Trailing \r submits.
         do {
-            _ = try await shellRunWithStdin(
-                kitten,
+            try await sendRawTextBatches(
+                via: kitten,
                 args: ["@", "send-text", "--match", "id:\(windowId)", "--stdin"],
-                stdin: text + "\r"
+                batches: rawTerminalSendBatches(text: text, source: source)
             )
         } catch {
             messageLog.error("kitty send-text failed: \(error.localizedDescription, privacy: .public)")
@@ -2159,7 +2153,7 @@ enum MessageSender {
         messageLog.info("kitty send completed windowId=\(windowId, privacy: .public)")
     }
 
-    private static func sendViaKaku(_ text: String, paneId: String?, tty: String?, cwd: String?) async {
+    private static func sendViaKaku(_ text: String, paneId: String?, tty: String?, cwd: String?, source: String) async {
         guard let kaku = findKakuBinary() else {
             messageLog.error("kaku binary not found")
             return
@@ -2175,16 +2169,11 @@ enum MessageSender {
             return
         }
 
-        // Single-shot: --no-paste writes raw bytes straight to the pane's pty. The
-        // trailing \r is delivered as a keypress instead of being wrapped in bracketed
-        // paste framing, so one call submits the message without the old two-step dance.
-        // Intentionally skip `activate-pane`: send-text addresses the pane by id via the
-        // mux, so we don't need (or want) to steal focus away from the user's current tab.
         do {
-            _ = try await shellRunWithStdin(
-                kaku,
+            try await sendRawTextBatches(
+                via: kaku,
                 args: ["cli", "send-text", "--pane-id", resolvedPaneId, "--no-paste"],
-                stdin: text + "\r"
+                batches: rawTerminalSendBatches(text: text, source: source)
             )
         } catch {
             messageLog.error("kaku send-text failed: \(error.localizedDescription, privacy: .public)")
@@ -2237,6 +2226,19 @@ enum MessageSender {
         }
 
         return nil
+    }
+
+    static func rawTerminalSendBatches(text: String, source: String) -> [String] {
+        if source == "codex" {
+            return [text, "\r"]
+        }
+        return [text + "\r"]
+    }
+
+    private static func sendRawTextBatches(via path: String, args: [String], batches: [String]) async throws {
+        for batch in batches where !batch.isEmpty {
+            _ = try await shellRunWithStdin(path, args: args, stdin: batch)
+        }
     }
 
     private static func shellRunWithStdin(_ path: String, args: [String], stdin: String) async throws -> String {
