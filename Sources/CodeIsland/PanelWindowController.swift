@@ -82,6 +82,7 @@ private final class HoverBlockingContainerView<Content: View>: NSView {
     let appState: AppState
     private var blockingTrackingArea: NSTrackingArea?
     private var isHandlingMouseDown = false
+    private weak var activeMouseTarget: NSView?
 
     init(hostingView: NotchHostingView<Content>, appState: AppState) {
         self.hostingView = hostingView
@@ -163,15 +164,53 @@ private final class HoverBlockingContainerView<Content: View>: NSView {
             }
             return
         }
+        forwardMouseDown(event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        if let activeMouseTarget {
+            activeMouseTarget.mouseDragged(with: event)
+        } else {
+            super.mouseDragged(with: event)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer { activeMouseTarget = nil }
+        if let activeMouseTarget {
+            activeMouseTarget.mouseUp(with: event)
+        } else {
+            super.mouseUp(with: event)
+        }
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        if let hitView = forwardedHitView(at: event.locationInWindow) {
+            hitView.scrollWheel(with: event)
+        } else {
+            super.scrollWheel(with: event)
+        }
+    }
+
+    private func forwardMouseDown(_ event: NSEvent) {
         // Borderless NSPanel sends all mouseDown to the content view.
         // Forward to the actual hit-tested view so AppKit controls
-        // (NSButton, NSTextField, etc.) receive events correctly.
-        let localPt = convert(event.locationInWindow, from: nil)
-        if let hitView = hitTest(localPt), hitView !== self, hitView !== hostingView {
+        // (NSButton, NSTextField, NSScroller, etc.) receive the full gesture.
+        if let hitView = forwardedHitView(at: event.locationInWindow) {
+            activeMouseTarget = hitView
             hitView.mouseDown(with: event)
         } else {
+            activeMouseTarget = nil
             super.mouseDown(with: event)
         }
+    }
+
+    private func forwardedHitView(at windowPoint: NSPoint) -> NSView? {
+        let localPoint = convert(windowPoint, from: nil)
+        guard let hitView = hitTest(localPoint), hitView !== self, hitView !== hostingView else {
+            return nil
+        }
+        return hitView
     }
 
     private func shouldInterceptChatBack(at windowPoint: NSPoint) -> Bool {

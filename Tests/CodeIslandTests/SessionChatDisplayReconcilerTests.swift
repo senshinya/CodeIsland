@@ -1,8 +1,23 @@
 import XCTest
+import AppKit
 @testable import CodeIsland
 @testable import CodeIslandCore
 
 final class SessionChatDisplayReconcilerTests: XCTestCase {
+    func testChatInputHeightRangeFitsExactlyThreeLines() {
+        let font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        let range = ChatInputMetrics.heightRange(for: font)
+
+        XCTAssertEqual(range.max, measuredChatInputContentHeight(for: "1\n2\n3", font: font))
+    }
+
+    func testChatInputHeightRangeStillOverflowsAtFourLines() {
+        let font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        let range = ChatInputMetrics.heightRange(for: font)
+
+        XCTAssertGreaterThan(measuredChatInputContentHeight(for: "1\n2\n3\n4", font: font), range.max)
+    }
+
     func testMessageBarIsAvailableForClaudeWithoutTmux() {
         var session = SessionSnapshot()
         session.source = "claude"
@@ -217,5 +232,30 @@ final class SessionChatDisplayReconcilerTests: XCTestCase {
         )
 
         XCTAssertEqual(updated, ["transcript-user-2": "pending-user-2"])
+    }
+
+    private func measuredChatInputContentHeight(for text: String, font: NSFont) -> CGFloat {
+        let textView = NSTextView(frame: .zero)
+        textView.font = font
+        textView.isRichText = false
+        textView.textContainerInset = NSSize(width: 2, height: 4)
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(
+            width: 0,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.string = text
+        textView.frame.size.width = 300
+
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer else {
+            XCTFail("Expected text system to be configured")
+            return 0
+        }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let usedRect = layoutManager.usedRect(for: textContainer)
+        let insets = textView.textContainerInset.height * 2
+        return ceil(usedRect.height + insets)
     }
 }

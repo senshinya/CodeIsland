@@ -38,10 +38,14 @@ struct SessionChatView: View {
     @State private var isPinnedToBottom = true
     @State private var newMessageCount = 0
     @State private var shouldAutoScrollOnNextLayout = true
+    /// Set by sendMessage so the next onChange-driven scroll routes through the settle
+    /// path instead of the fast 4-loop. Post-send scrolls often have to jump across
+    /// unmaterialized LazyVStack rows (user was scrolled up), which produces a black
+    /// flash with the fast loop. Streaming updates stay on the fast loop.
+    @State private var sendTriggeredScrollSettle = false
     @State private var pendingPinnedScroll = false
     @State private var isPerformingProgrammaticScroll = false
     @State private var programmaticScrollResetTask: Task<Void, Never>?
-    @State private var animatedAppearanceMessageIDs: Set<String> = []
     @StateObject private var scrollController = SessionChatScrollController()
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
     @AppStorage(SettingsKey.maxPanelHeight) private var maxPanelHeight = SettingsDefaults.maxPanelHeight
@@ -61,7 +65,11 @@ struct SessionChatView: View {
         )
     }
     private var visibleMessages: [DisplayedChatMessage] {
-        let limit = session.source == "codex" ? 240 : 400
+        // Bounded to keep VStack first-render cheap. MarkdownUI instantiates
+        // block views eagerly so cost scales with row count. 150 is enough to
+        // cover most in-session history; older messages stay in the transcript
+        // file and aren't lost, they're just not rendered in the chat panel.
+        let limit = session.source == "codex" ? 120 : 150
         if displayedMessages.count > limit {
             return Array(displayedMessages.suffix(limit))
         }
@@ -106,7 +114,6 @@ struct SessionChatView: View {
             newMessageCount = 0
             shouldAutoScrollOnNextLayout = true
             pendingPinnedScroll = false
-            animatedAppearanceMessageIDs = []
             isPerformingProgrammaticScroll = false
             scheduleInitialContentRevealFallback()
             loadMessages()
@@ -189,19 +196,18 @@ struct SessionChatView: View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {
-                    LazyVStack(alignment: .leading, spacing: 4) {
+                    // Eager VStack instead of LazyVStack. Rationale: the message list
+                    // is bounded (400 Claude / 240 Codex), LazyVStack's height-estimation
+                    // races with MarkdownUI's variable-height block rendering caused
+                    // scroll-to-bottom to land in unmaterialized regions (persistent
+                    // black panel). Eager layout trades a slightly slower first-render
+                    // for correct, race-free scroll positioning. See git history for
+                    // the /hunt sessions that arrived at this.
+                    VStack(alignment: .leading, spacing: 4) {
                         ForEach(visibleMessages) { msg in
                             messageRow(msg.message)
-                                .modifier(
-                                    MessageAppearanceModifier(
-                                        animateOnAppear: animatedAppearanceMessageIDs.contains(msg.id)
-                                    )
-                                )
                                 .id(msg.id)
-                                .transition(.asymmetric(
-                                    insertion: .move(edge: .bottom).combined(with: .opacity),
-                                    removal: .opacity
-                                ))
+                                .transition(.opacity.animation(.easeOut(duration: 0.18)))
                         }
                     }
                     .padding(.horizontal, 18)
@@ -236,7 +242,11 @@ struct SessionChatView: View {
             .animation(.easeIn(duration: 0.12), value: hasRevealedInitialContent)
             .onAppear {
                 scrollController.onNewMessagesTapped = {
-                    scrollToBottom(with: proxy, delay: nil, verifyBottom: true)
+                    // settle: true — polls document height stability and re-scrolls on
+                    // layout changes, which is required because MarkdownUI lazy rows
+                    // grow after the initial scroll jump and would otherwise leave us
+                    // stopped short of the real bottom (plus a flash of empty space).
+                    scrollToBottom(with: proxy, delay: nil, verifyBottom: true, settle: true)
                 }
                 scrollToBottom(with: proxy, isInitial: true)
             }
@@ -263,17 +273,30 @@ struct SessionChatView: View {
             .onChange(of: visibleMessages) { _, _ in
                 guard shouldAutoScrollOnNextLayout else { return }
                 if hasCompletedInitialScroll {
-                    scrollToBottomTask?.cancel()
-                    scrollToBottomTask = Task { @MainActor in
-                        for _ in 0..<4 {
-                            try? await Task.sleep(for: .milliseconds(16))
-                            guard !Task.isCancelled else { return }
-                            performScrollToBottom(with: proxy)
-                            if scrollController.isAtBottom { break }
+                    if sendTriggeredScrollSettle {
+                        // One-shot settle after sendMessage: we may be jumping across
+                        // unmaterialized lazy rows (user was scrolled up), so go through
+                        // the height-stability poll instead of the fast 4-loop. Otherwise
+                        // the jump exposes the scroll view's dark background before
+                        // MarkdownUI blocks finish painting (the "black flash").
+                        sendTriggeredScrollSettle = false
+                        scrollToBottom(with: proxy, delay: nil, verifyBottom: true, settle: true)
+                    } else {
+                        // Streaming path — cheap fast loop. At this point we're already
+                        // near the bottom from the previous scroll, so the rows being
+                        // updated are already materialized and 64ms is sufficient.
+                        scrollToBottomTask?.cancel()
+                        scrollToBottomTask = Task { @MainActor in
+                            for _ in 0..<4 {
+                                try? await Task.sleep(for: .milliseconds(16))
+                                guard !Task.isCancelled else { return }
+                                performScrollToBottom(with: proxy)
+                                if scrollController.isAtBottom { break }
+                            }
+                            isPinnedToBottom = true
+                            pendingPinnedScroll = false
+                            shouldAutoScrollOnNextLayout = false
                         }
-                        isPinnedToBottom = true
-                        pendingPinnedScroll = false
-                        shouldAutoScrollOnNextLayout = false
                     }
                 } else {
                     scrollToBottom(with: proxy)
@@ -286,9 +309,15 @@ struct SessionChatView: View {
         with proxy: ScrollViewProxy,
         isInitial: Bool = false,
         delay: Duration? = .milliseconds(75),
-        verifyBottom: Bool = false
+        verifyBottom: Bool = false,
+        settle: Bool = false
     ) {
         let wasInitialPending = isInitial || !hasCompletedInitialScroll
+        // Initial path already polls for layout stability — reuse the same settle loop
+        // for any caller that opts in. This handles layout races from lazy rows whose
+        // real heights only materialize after the scroll jump (MarkdownUI blocks are
+        // the common trigger).
+        let shouldSettle = settle || wasInitialPending
         scrollToBottomTask?.cancel()
         pendingPinnedScroll = true
         scrollToBottomTask = Task { @MainActor in
@@ -299,22 +328,26 @@ struct SessionChatView: View {
             }
             guard !Task.isCancelled else { return }
             performScrollToBottom(with: proxy)
-            if verifyBottom {
-                let reachedBottom = await confirmBottomPosition(with: proxy)
-                guard !Task.isCancelled else { return }
-                isPinnedToBottom = reachedBottom
-                if reachedBottom {
-                    newMessageCount = 0
-                }
-            }
-            if wasInitialPending {
+
+            if shouldSettle {
                 await settleInitialBottomLock(with: proxy)
+                guard !Task.isCancelled else { return }
                 let reachedBottom = await confirmBottomPosition(
                     with: proxy,
                     delays: InitialScrollTiming.finalVerificationDelays
                 )
                 guard !Task.isCancelled else { return }
                 isPinnedToBottom = reachedBottom
+                if reachedBottom {
+                    newMessageCount = 0
+                }
+            } else if verifyBottom {
+                let reachedBottom = await confirmBottomPosition(with: proxy)
+                guard !Task.isCancelled else { return }
+                isPinnedToBottom = reachedBottom
+                if reachedBottom {
+                    newMessageCount = 0
+                }
             }
 
             pendingPinnedScroll = false
@@ -323,7 +356,7 @@ struct SessionChatView: View {
                 hasCompletedInitialScroll = true
                 revealInitialContent()
             }
-            if !verifyBottom, !wasInitialPending, scrollController.documentHeight != nil {
+            if !verifyBottom, !shouldSettle, scrollController.documentHeight != nil {
                 isPinnedToBottom = scrollController.isAtBottom
             }
             if isPinnedToBottom {
@@ -901,13 +934,7 @@ struct SessionChatView: View {
             newMessageCount += insertedDisplayIDs.count
         }
 
-        if shouldAutoScrollOnNextLayout {
-            animatedAppearanceMessageIDs = hasCompletedInitialScroll ? insertedDisplayIDs : []
-            applyStateChanges()
-        } else {
-            animatedAppearanceMessageIDs = []
-            applyStateChanges()
-        }
+        applyStateChanges()
     }
 
     private func sendMessage(_ rawText: String) {
@@ -924,7 +951,7 @@ struct SessionChatView: View {
         newMessageCount = 0
         shouldAutoScrollOnNextLayout = true
         pendingPinnedScroll = true
-        animatedAppearanceMessageIDs = hasCompletedInitialScroll ? [pendingMessage.id] : []
+        sendTriggeredScrollSettle = true
         pendingUserMessages.append(pendingMessage)
         Task { @MainActor in
             if watchedTranscriptPath == nil {
@@ -954,6 +981,15 @@ struct SessionMessageInputBar: View {
     var outerBottomPadding: CGFloat = 14
 
     @State private var inputFocusRequest = 0
+    @State private var measuredInputHeight: CGFloat = 24
+
+    private var editorFont: NSFont {
+        .monospacedSystemFont(ofSize: fontSize + 1, weight: .regular)
+    }
+
+    private var inputHeightRange: (min: CGFloat, max: CGFloat) {
+        ChatInputMetrics.heightRange(for: editorFont)
+    }
 
     /// Draft lives on AppState so it survives when the view is torn down (e.g. session list
     /// toggle, chat↔approval swap). Prior to this we used `@State` and lost the in-progress
@@ -973,15 +1009,23 @@ struct SessionMessageInputBar: View {
     }
 
     var body: some View {
+        let range = inputHeightRange
         ChatInputEditor(
             text: messageInputBinding,
-            font: .monospacedSystemFont(ofSize: fontSize + 1, weight: .regular),
+            font: editorFont,
             placeholderText: placeholderText,
             focusRequest: inputFocusRequest,
+            maxHeight: range.max,
             onSubmit: submitMessage,
-            onFocusChange: onFocusChange
+            onFocusChange: onFocusChange,
+            onHeightChange: { newHeight in
+                let clamped = min(max(newHeight, range.min), range.max)
+                if abs(clamped - measuredInputHeight) > 0.5 {
+                    measuredInputHeight = clamped
+                }
+            }
         )
-        .frame(height: 24)
+        .frame(height: min(max(measuredInputHeight, range.min), range.max))
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(
@@ -1271,28 +1315,6 @@ private final class ScrollObserverView: NSView {
     }
 }
 
-private struct MessageAppearanceModifier: ViewModifier {
-    let animateOnAppear: Bool
-    @State private var isVisible = false
-
-    func body(content: Content) -> some View {
-        content
-            .opacity(animateOnAppear ? (isVisible ? 1 : 0.2) : 1)
-            .offset(y: animateOnAppear ? (isVisible ? 0 : 8) : 0)
-            .scaleEffect(animateOnAppear ? (isVisible ? 1 : 0.985) : 1, anchor: .bottom)
-            .onAppear {
-                guard animateOnAppear else {
-                    isVisible = true
-                    return
-                }
-                isVisible = false
-                withAnimation(.easeOut(duration: 0.18)) {
-                    isVisible = true
-                }
-            }
-    }
-}
-
 enum SessionChatDisplayReconciler {
     static func displayMessages(
         messages: [SessionChatMessage],
@@ -1379,21 +1401,40 @@ enum SessionChatDisplayReconciler {
 
 // MARK: - Chat Input Editor (NSTextView wrapper)
 
+enum ChatInputMetrics {
+    static let minimumHeight: CGFloat = 24
+    static let visibleLineLimit = 3
+    static let verticalInsets: CGFloat = 8
+
+    static func heightRange(for font: NSFont) -> (min: CGFloat, max: CGFloat) {
+        // Match NSTextView's actual line metrics. ascender/descender/leading
+        // undercounts the monospaced system font enough to make exactly 3 lines
+        // overflow by 1px, which exposed a useless scroller and clipped selection.
+        let lineHeight = NSLayoutManager().defaultLineHeight(for: font)
+        let maxHeight = ceil(lineHeight * CGFloat(visibleLineLimit)) + verticalInsets
+        return (minimumHeight, max(maxHeight, minimumHeight))
+    }
+}
+
 /// Multi-line text input: Enter sends, Shift+Enter inserts newline.
 private struct ChatInputEditor: NSViewRepresentable {
     @Binding var text: String
     var font: NSFont
     var placeholderText: String
     var focusRequest: Int
+    var maxHeight: CGFloat = .greatestFiniteMagnitude
     var onSubmit: () -> Void
     var onFocusChange: ((Bool) -> Void)? = nil
+    var onHeightChange: ((CGFloat) -> Void)? = nil
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = false
+        scrollView.scrollerStyle = .overlay
+        scrollView.verticalScroller?.controlSize = .mini
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
-        scrollView.autohidesScrollers = true
+        scrollView.autohidesScrollers = false
         scrollView.hasHorizontalScroller = false
         scrollView.contentView.drawsBackground = false
 
@@ -1411,10 +1452,11 @@ private struct ChatInputEditor: NSViewRepresentable {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.textContainerInset = NSSize(width: 2, height: 4)
+        // Manual sizing: we drive both width and height explicitly from reportHeight.
         textView.isVerticallyResizable = false
         textView.isHorizontallyResizable = false
-        textView.autoresizingMask = [.width]
-        textView.minSize = NSSize(width: 0, height: 0)
+        textView.autoresizingMask = []
+        textView.minSize = .zero
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
@@ -1432,17 +1474,19 @@ private struct ChatInputEditor: NSViewRepresentable {
         )
         context.coordinator.placeholderAttr = placeholder
         context.coordinator.textView = textView
+        context.coordinator.onHeightChange = onHeightChange
+        context.coordinator.maxHeight = maxHeight
         textView.onFocusChange = context.coordinator.onFocusChange
         context.coordinator.updatePlaceholder()
+        DispatchQueue.main.async {
+            context.coordinator.reportHeight()
+        }
 
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         let textView = scrollView.documentView as! ChatInputTextView
-        if textView.frame.size != scrollView.contentSize {
-            textView.frame = NSRect(origin: .zero, size: scrollView.contentSize)
-        }
         if textView.string != text {
             context.coordinator.isApplyingExternalText = true
             textView.string = text
@@ -1451,7 +1495,10 @@ private struct ChatInputEditor: NSViewRepresentable {
         }
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onFocusChange = onFocusChange
+        context.coordinator.onHeightChange = onHeightChange
+        context.coordinator.maxHeight = maxHeight
         textView.onFocusChange = context.coordinator.onFocusChange
+        context.coordinator.reportHeight()
         if context.coordinator.lastFocusRequest != focusRequest {
             context.coordinator.lastFocusRequest = focusRequest
             DispatchQueue.main.async {
@@ -1469,16 +1516,21 @@ private struct ChatInputEditor: NSViewRepresentable {
         var parent: ChatInputEditor
         var onSubmit: (() -> Void)?
         var onFocusChange: ((Bool) -> Void)?
+        var onHeightChange: ((CGFloat) -> Void)?
+        var maxHeight: CGFloat = .greatestFiniteMagnitude
         var placeholderAttr: NSAttributedString?
         weak var textView: NSTextView?
         private var placeholderView: NSTextField?
         var lastFocusRequest: Int
         var isApplyingExternalText = false
+        private var lastReportedHeight: CGFloat = -1
 
         init(_ parent: ChatInputEditor) {
             self.parent = parent
             self.onSubmit = parent.onSubmit
             self.onFocusChange = parent.onFocusChange
+            self.onHeightChange = parent.onHeightChange
+            self.maxHeight = parent.maxHeight
             self.lastFocusRequest = parent.focusRequest
         }
 
@@ -1486,12 +1538,60 @@ private struct ChatInputEditor: NSViewRepresentable {
             guard let tv = notification.object as? NSTextView else { return }
             guard !isApplyingExternalText else {
                 updatePlaceholder()
+                reportHeight()
                 return
             }
-            DispatchQueue.main.async {
-                self.parent.text = tv.string
-            }
+            // Keep the SwiftUI/AppState binding in sync before reportHeight triggers
+            // a layout-driven updateNSView. An async write lets the old binding value
+            // bounce back into the editor, which shows up as "delete twice to clear".
+            parent.text = tv.string
             updatePlaceholder()
+            reportHeight()
+        }
+
+        func reportHeight() {
+            guard let tv = textView,
+                  let scrollView = tv.enclosingScrollView,
+                  let layoutManager = tv.layoutManager,
+                  let textContainer = tv.textContainer else { return }
+
+            // 1. Match textView width to the clip view before measuring — width
+            //    determines line wrapping, so usedRect is only valid afterwards.
+            let targetWidth = scrollView.contentSize.width
+            if targetWidth > 0, abs(tv.frame.width - targetWidth) > 0.5 {
+                tv.frame.size.width = targetWidth
+            }
+
+            // 2. Force full layout of all glyphs so usedRect (and selectAll)
+            //    reflect the entire text, not just what's on screen.
+            layoutManager.ensureLayout(for: textContainer)
+            let glyphRange = layoutManager.glyphRange(for: textContainer)
+            _ = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+            let used = layoutManager.usedRect(for: textContainer)
+            let insets = tv.textContainerInset.height * 2
+            let contentHeight = ceil(used.height + insets)
+
+            // 3. When content fits within the cap, match clip size exactly to
+            //    avoid the scroller flickering on. When it overflows, size the
+            //    document to the full height so scrolling has room.
+            let clipHeight = scrollView.contentSize.height
+            let fitsWithinCap = contentHeight <= maxHeight + 0.5
+            let newTextViewHeight: CGFloat = fitsWithinCap
+                ? max(contentHeight, clipHeight)
+                : contentHeight
+            if abs(tv.frame.height - newTextViewHeight) > 0.5 {
+                tv.frame.size.height = newTextViewHeight
+            }
+            let shouldShowScroller = !fitsWithinCap
+            if scrollView.hasVerticalScroller != shouldShowScroller {
+                scrollView.hasVerticalScroller = shouldShowScroller
+            }
+
+            let clamped = min(contentHeight, maxHeight)
+            if abs(clamped - lastReportedHeight) > 0.5 {
+                lastReportedHeight = clamped
+                onHeightChange?(clamped)
+            }
         }
 
         func textView(_ textView: NSTextView, doCommandBy sel: Selector) -> Bool {
