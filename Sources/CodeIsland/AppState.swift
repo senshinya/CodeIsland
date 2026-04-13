@@ -44,6 +44,8 @@ final class AppState {
     private var completionAutoCollapseDeadline: Date?
     /// Mouse must enter the panel before auto-collapse is allowed (prevents instant dismiss)
     var completionHasBeenEntered = false
+    /// Auto-collapse timer fired but mouse is inside panel — defer collapse until mouse leaves
+    var deferCollapseOnMouseLeave = false
     var isMessageInputFocused = false
     private var processMonitors: [String: (source: DispatchSourceProcess, process: ProcessIdentity)] = [:]
     private var exitingSessions: [String: ProcessIdentity] = [:]
@@ -115,7 +117,7 @@ final class AppState {
         // 2. Reset likely-stuck sessions only when we have no process monitor.
         //    If the process is still monitored/alive, trust explicit Stop/SessionEnd or
         //    process exit instead of synthesizing idle and risking false-idle mid-thought.
-        //    - No tool + no monitor: 60s (likely lost Stop event)
+        //    - No tool + no monitor: 300s (agents can think for several minutes)
         //    - Has tool + no monitor: 180s (long build / deep thinking with missed exit)
         for (key, session) in sessions
             where processMonitors[key] == nil
@@ -123,7 +125,7 @@ final class AppState {
             && session.status != .waitingApproval
             && session.status != .waitingQuestion {
             let elapsed = -session.lastActivity.timeIntervalSinceNow
-            let threshold: TimeInterval = session.currentTool != nil ? 180 : 60
+            let threshold: TimeInterval = session.currentTool != nil ? 180 : 300
             if elapsed > threshold {
                 sessions[key]?.status = .idle
                 sessions[key]?.currentTool = nil
@@ -601,6 +603,7 @@ final class AppState {
             surface = .completionCard(sessionId: sessionId)
         }
         completionHasBeenEntered = false
+        deferCollapseOnMouseLeave = false
         if let retainedSession, sessions[sessionId] == nil {
             retainedCompletionSessionId = sessionId
             retainedCompletionSession = retainedSession
@@ -618,9 +621,15 @@ final class AppState {
         retainedCompletionSessionId = nil
         retainedCompletionSession = nil
         completionQueue.removeAll()
+        deferCollapseOnMouseLeave = false
     }
 
     private func showNextCompletionOrCollapse() {
+        // Once the mouse has entered the completion card, defer collapse until it leaves
+        if completionHasBeenEntered {
+            deferCollapseOnMouseLeave = true
+            return
+        }
         completionAutoCollapseDeadline = nil
         retainedCompletionSessionId = nil
         retainedCompletionSession = nil
@@ -1831,6 +1840,10 @@ final class AppState {
         guard !watchRoots.isEmpty else { return }
 
         var context = FSEventStreamContext()
+        // passUnretained is safe here: the stream is dispatched on .main (same as
+        // @MainActor), so callbacks cannot interleave with deinit. Both
+        // stopSessionDiscovery() and deinit stop/invalidate the stream synchronously
+        // on the main thread before self is deallocated.
         context.info = Unmanaged.passUnretained(self).toOpaque()
 
         let stream = FSEventStreamCreate(

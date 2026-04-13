@@ -531,7 +531,7 @@ struct ConfigInstaller {
             lines.insert("codex_hooks = true", at: featIdx + 1)
         } else {
             // No [features] section — append one
-            if !lines.last!.isEmpty { lines.append("") }
+            if !(lines.last ?? "").isEmpty { lines.append("") }
             lines.append("[features]")
             lines.append("codex_hooks = true")
         }

@@ -180,6 +180,8 @@ private struct BehaviorPage: View {
     @AppStorage(SettingsKey.hideWhenNoSession) private var hideWhenNoSession = SettingsDefaults.hideWhenNoSession
     @AppStorage(SettingsKey.smartSuppress) private var smartSuppress = SettingsDefaults.smartSuppress
     @AppStorage(SettingsKey.collapseOnMouseLeave) private var collapseOnMouseLeave = SettingsDefaults.collapseOnMouseLeave
+    @AppStorage(SettingsKey.hapticOnHover) private var hapticOnHover = SettingsDefaults.hapticOnHover
+    @AppStorage(SettingsKey.hapticIntensity) private var hapticIntensity = SettingsDefaults.hapticIntensity
     @AppStorage(SettingsKey.sessionTimeout) private var sessionTimeout = SettingsDefaults.sessionTimeout
     @AppStorage(SettingsKey.rotationInterval) private var rotationInterval = SettingsDefaults.rotationInterval
     @AppStorage(SettingsKey.maxToolHistory) private var maxToolHistory = SettingsDefaults.maxToolHistory
@@ -211,6 +213,23 @@ private struct BehaviorPage: View {
                     isOn: $collapseOnMouseLeave,
                     animation: .collapseMouseLeave
                 )
+                BehaviorToggleRow(
+                    title: l10n["haptic_on_hover"],
+                    desc: l10n["haptic_on_hover_desc"],
+                    isOn: $hapticOnHover,
+                    animation: .hapticHover
+                )
+                if hapticOnHover {
+                    Picker(selection: $hapticIntensity) {
+                        Text(l10n["haptic_light"]).tag(1)
+                        Text(l10n["haptic_medium"]).tag(2)
+                        Text(l10n["haptic_strong"]).tag(3)
+                    } label: {
+                        EmptyView()
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.leading, 84)
+                }
             }
 
             Section(l10n["sessions"]) {
@@ -422,8 +441,16 @@ private struct AppearancePage: View {
     @AppStorage(SettingsKey.collapsedWidthOffsetWorking) private var collapsedWidthOffsetWorking = SettingsDefaults.collapsedWidthOffsetWorking
     @AppStorage(SettingsKey.collapsedWidthPreview) private var collapsedWidthPreview = ""
     @AppStorage(SettingsKey.expandedWidth) private var expandedWidth = SettingsDefaults.expandedWidth
-    @AppStorage(SettingsKey.collapsedHeightOffset) private var collapsedHeightOffset = SettingsDefaults.collapsedHeightOffset
+    @AppStorage(SettingsKey.notchHeightMode) private var notchHeightModeRaw = SettingsDefaults.notchHeightMode
+    @AppStorage(SettingsKey.customNotchHeight) private var customNotchHeight = SettingsDefaults.customNotchHeight
     @State private var collapsedWidthPreviewTimer: Timer?
+
+    private var notchHeightMode: Binding<NotchHeightMode> {
+        Binding(
+            get: { NotchHeightMode(rawValue: notchHeightModeRaw) ?? .matchNotch },
+            set: { notchHeightModeRaw = $0.rawValue }
+        )
+    }
 
     private var expandedUsageDisplay: Binding<ExpandedUsageDisplayMode> {
         Binding(
@@ -495,19 +522,6 @@ private struct AppearancePage: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text(l10n["collapsed_height"])
-                        Spacer()
-                        Text(collapsedHeightOffset == 0
-                             ? l10n["default"]
-                             : String(format: "%+.0f px", collapsedHeightOffset))
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                    }
-                    Slider(value: $collapsedHeightOffset, in: -15...15, step: 1)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
                         Text(l10n["expanded_width"])
                         Spacer()
                         Text(expandedWidth == SettingsDefaults.expandedWidth
@@ -517,6 +531,28 @@ private struct AppearancePage: View {
                             .monospacedDigit()
                     }
                     Slider(value: $expandedWidth, in: 400...800, step: 10)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Picker(selection: notchHeightMode) {
+                        Text(l10n["notch_height_match_notch"]).tag(NotchHeightMode.matchNotch)
+                        Text(l10n["notch_height_match_menubar"]).tag(NotchHeightMode.matchMenuBar)
+                        Text(l10n["notch_height_custom"]).tag(NotchHeightMode.custom)
+                    } label: {
+                        Text(l10n["notch_height_mode"])
+                        Text(l10n["notch_height_mode_desc"])
+                    }
+
+                    if notchHeightMode.wrappedValue == .custom {
+                        HStack {
+                            Text(l10n["custom_notch_height"])
+                            Spacer()
+                            Text("\(Int(customNotchHeight.rounded()))pt")
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                        Slider(value: $customNotchHeight, in: 15...60, step: 1)
+                    }
                 }
             }
 
@@ -848,7 +884,7 @@ private struct SoundEventRow: View {
                 } else {
                     Text(l10n["custom_sound_set"].replacingOccurrences(of: "%@", with: URL(fileURLWithPath: customPath).lastPathComponent))
                         .font(.system(size: 11))
-                        .foregroundColor(.orange)
+                        .foregroundStyle(.orange)
                 }
             }
             Spacer(minLength: 16)
@@ -869,7 +905,7 @@ private struct SoundEventRow: View {
             } label: {
                 Image(systemName: customPath.isEmpty ? "waveform" : "waveform.circle.fill")
                     .font(.system(size: 14))
-                    .foregroundColor(customPath.isEmpty ? .secondary : .orange)
+                    .foregroundStyle(customPath.isEmpty ? .secondary : Color.orange)
             }
             .menuStyle(.borderlessButton)
             .frame(width: 24)
@@ -1003,7 +1039,7 @@ private struct AboutPage: View {
 // MARK: - Behavior Animation Previews
 
 private enum BehaviorAnim {
-    case hideFullscreen, hideNoSession, smartSuppress, collapseMouseLeave
+    case hideFullscreen, hideNoSession, smartSuppress, collapseMouseLeave, hapticHover
 }
 
 private struct BehaviorToggleRow: View {
@@ -1053,6 +1089,7 @@ private struct NotchMiniAnim: View {
         case .hideNoSession:    drawNoSession(c, sz: sz, t: t)
         case .smartSuppress:    drawSuppress(c, sz: sz, t: t)
         case .collapseMouseLeave: drawMouseLeave(c, sz: sz, t: t)
+        case .hapticHover:      drawHaptic(c, sz: sz, t: t)
         }
     }
 
@@ -1202,6 +1239,54 @@ private struct NotchMiniAnim: View {
                 cy = lerp(6, sz.height - 2, min(1, t))
             }
             // Draw cursor arrow
+            var arrow = Path()
+            arrow.move(to: CGPoint(x: cx, y: cy))
+            arrow.addLine(to: CGPoint(x: cx, y: cy + 8))
+            arrow.addLine(to: CGPoint(x: cx + 2.5, y: cy + 6))
+            arrow.addLine(to: CGPoint(x: cx + 5.5, y: cy + 6))
+            arrow.closeSubpath()
+            c.fill(arrow, with: .color(.white.opacity(0.9)))
+            c.stroke(arrow, with: .color(.black.opacity(0.4)), lineWidth: 0.5)
+        }
+    }
+
+    // 5) Haptic: cursor enters → notch shakes briefly (vibration effect)
+    private func drawHaptic(_ c: GraphicsContext, sz: CGSize, t: Double) {
+        let cycle = t.truncatingRemainder(dividingBy: 2.5) / 2.5
+
+        // Cursor approaches and hovers
+        let cursorIn = cycle > 0.05 && cycle < 0.55
+        // Shake phase: short burst when cursor first arrives
+        let shakePhase = (cycle > 0.15 && cycle < 0.35)
+        let shakeOffset: CGFloat = shakePhase
+            ? CGFloat(sin(cycle * 180)) * 2.5
+            : 0
+
+        drawPill(c, sz: CGSize(width: sz.width + shakeOffset, height: sz.height),
+                 w: 28, h: 10, op: 1.0)
+
+        // Vibration lines (radiating from notch during shake)
+        if shakePhase {
+            let lineOp = sin((cycle - 0.15) / 0.2 * .pi)
+            let cx = sz.width / 2
+            for dx: CGFloat in [-10, -6, 6, 10] {
+                let x = cx + dx + shakeOffset / 2
+                c.fill(Path(CGRect(x: x, y: 13, width: 0.8, height: 3)),
+                       with: .color(orange.opacity(0.6 * lineOp)))
+            }
+        }
+
+        // Mouse cursor
+        if cursorIn {
+            let cx: CGFloat, cy: CGFloat
+            if cycle < 0.15 {
+                let p = (cycle - 0.05) / 0.1
+                cx = lerp(sz.width / 2 + 15, sz.width / 2 + 2, p)
+                cy = lerp(sz.height - 5, 8, p)
+            } else {
+                cx = sz.width / 2 + 2
+                cy = 8
+            }
             var arrow = Path()
             arrow.move(to: CGPoint(x: cx, y: cy))
             arrow.addLine(to: CGPoint(x: cx, y: cy + 8))

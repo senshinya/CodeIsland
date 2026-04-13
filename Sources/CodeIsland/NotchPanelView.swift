@@ -18,7 +18,8 @@ struct NotchPanelView: View {
     @AppStorage(SettingsKey.collapsedWidthOffsetWorking) private var collapsedWidthOffsetWorking = SettingsDefaults.collapsedWidthOffsetWorking
     @AppStorage(SettingsKey.collapsedWidthPreview) private var collapsedWidthPreview = ""
     @AppStorage(SettingsKey.expandedWidth) private var expandedWidth = SettingsDefaults.expandedWidth
-    @AppStorage(SettingsKey.collapsedHeightOffset) private var collapsedHeightOffset = SettingsDefaults.collapsedHeightOffset
+    @AppStorage(SettingsKey.hapticOnHover) private var hapticOnHover = SettingsDefaults.hapticOnHover
+    @AppStorage(SettingsKey.hapticIntensity) private var hapticIntensity = SettingsDefaults.hapticIntensity
     @ObservedObject private var usageTracker = UsageTracker.shared
     @ObservedObject private var codexUsageTracker = CodexUsageTracker.shared
 
@@ -61,11 +62,6 @@ struct NotchPanelView: View {
 
     /// Minimum wing width needed to display compact bar content
     private var compactWingWidth: CGFloat { mascotSize + 14 }
-
-    /// Effective collapsed bar height — respects user offset
-    private var collapsedBarHeight: CGFloat {
-        notchHeight + CGFloat(collapsedHeightOffset)
-    }
 
     /// Active collapsed width offset — respects preview override from settings
     private var activeCollapsedWidthOffset: CGFloat {
@@ -118,21 +114,21 @@ struct NotchPanelView: View {
                         }
                         CompactRightWing(appState: appState, expanded: shouldShowExpanded, hasNotch: hasNotch)
                     }
-                    .frame(height: shouldShowExpanded ? notchHeight : collapsedBarHeight)
+                    .frame(height: notchHeight)
                 } else if showIdleIndicator {
                     IdleIndicatorBar(
                         mascotSize: mascotSize,
                         compactWingWidth: compactWingWidth,
                         notchW: notchW,
                         notchHeight: notchHeight,
-                        barHeight: collapsedBarHeight,
+                        barHeight: notchHeight,
                         hasNotch: hasNotch,
                         hovered: idleHovered
                     )
                 } else {
                     // Idle: just the notch shell
                     Spacer()
-                        .frame(height: collapsedBarHeight)
+                        .frame(height: notchHeight)
                 }
 
                 // Below-notch expanded content
@@ -217,7 +213,7 @@ struct NotchPanelView: View {
                 NotchPanelShape(
                     topExtension: shouldShowExpanded ? 14 : 8,
                     bottomRadius: shouldShowExpanded ? 24 : 14,
-                    minHeight: shouldShowExpanded ? notchHeight : collapsedBarHeight
+                    minHeight: notchHeight
                 )
                 .fill(.black)
             )
@@ -288,13 +284,14 @@ struct NotchPanelView: View {
                     // Completion card: mark entered on hover-in, block collapse until entered
                     if hovering {
                         appState.completionHasBeenEntered = true
-                    } else if appState.completionHasBeenEntered {
-                        // Mouse entered then left — allow collapse
+                    } else if appState.completionHasBeenEntered || appState.deferCollapseOnMouseLeave {
+                        // Mouse entered then left — allow collapse (immediate or deferred)
                         hoverTimer?.invalidate()
                         hoverTimer = nil
+                        appState.deferCollapseOnMouseLeave = false
+                        appState.cancelCompletionQueue()
                         withAnimation(NotchAnimation.close) {
                             appState.surface = .collapsed
-                            appState.cancelCompletionQueue()
                         }
                     }
                     return
@@ -319,6 +316,20 @@ struct NotchPanelView: View {
                         Task { @MainActor in
                             // Guard: mouse may have left during the delay
                             guard isHovered else { return }
+                            if hapticOnHover {
+                                let performer = NSHapticFeedbackManager.defaultPerformer
+                                switch hapticIntensity {
+                                case 3: // strong: two taps
+                                    performer.perform(.levelChange, performanceTime: .now)
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                        performer.perform(.levelChange, performanceTime: .now)
+                                    }
+                                case 2: // medium
+                                    performer.perform(.levelChange, performanceTime: .default)
+                                default: // light
+                                    performer.perform(.alignment, performanceTime: .default)
+                                }
+                            }
                             withAnimation(NotchAnimation.open) {
                                 appState.surface = .sessionList
                                 appState.cancelCompletionQueue()
@@ -353,7 +364,6 @@ struct NotchPanelView: View {
         .animation(.easeInOut(duration: 0.15), value: collapsedWidthOffsetWorking)
         .animation(.easeInOut(duration: 0.15), value: collapsedWidthPreview)
         .animation(.easeInOut(duration: 0.15), value: expandedWidth)
-        .animation(.easeInOut(duration: 0.15), value: collapsedHeightOffset)
     }
 
     private func configureUsagePolling() {

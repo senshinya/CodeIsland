@@ -492,11 +492,15 @@ class PanelWindowController: NSObject, NSWindowDelegate {
 
     private var lastDisplayChoice = ""
     private var lastExpandedWidth = 0.0
+    private var lastNotchHeightMode = SettingsDefaults.notchHeightMode
+    private var lastCustomNotchHeight = SettingsDefaults.customNotchHeight
     private var expandedWidthCollapseTimer: Timer?
 
     private func observeSettingsChanges() {
         lastDisplayChoice = SettingsManager.shared.displayChoice
         lastExpandedWidth = SettingsManager.shared.expandedWidth
+        lastNotchHeightMode = SettingsManager.shared.notchHeightMode.rawValue
+        lastCustomNotchHeight = SettingsManager.shared.customNotchHeight
         let observer = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,
             object: nil,
@@ -505,10 +509,17 @@ class PanelWindowController: NSObject, NSWindowDelegate {
             Task { @MainActor in
                 guard let self = self else { return }
                 let newChoice = SettingsManager.shared.displayChoice
+                let newHeightMode = SettingsManager.shared.notchHeightMode.rawValue
+                let newCustomHeight = SettingsManager.shared.customNotchHeight
                 if newChoice != self.lastDisplayChoice {
                     self.lastDisplayChoice = newChoice
                     self.refreshCurrentScreen(forceRebuild: true)
                     self.configureAutoScreenPolling()
+                } else if newHeightMode != self.lastNotchHeightMode
+                    || abs(newCustomHeight - self.lastCustomNotchHeight) > 0.001 {
+                    self.lastNotchHeightMode = newHeightMode
+                    self.lastCustomNotchHeight = newCustomHeight
+                    self.refreshCurrentScreen(forceRebuild: true)
                 } else {
                     // Auto-expand when expanded width setting changes, auto-collapse when done
                     let newExpandedWidth = SettingsManager.shared.expandedWidth
