@@ -44,10 +44,46 @@ final class SessionChatDisplayReconcilerTests: XCTestCase {
     func testMessageBarStaysHiddenForClaudeInUnsupportedTerminal() {
         var session = SessionSnapshot()
         session.source = "claude"
+        session.termBundleId = "dev.warp.Warp-Stable"
+        session.ttyPath = "/dev/ttys001"
+
+        XCTAssertFalse(SessionChatView.SessionMessageBarSupport.canShow(for: session))
+    }
+
+    func testMessageBarIsAvailableForClaudeInITerm2WithSessionId() {
+        var session = SessionSnapshot()
+        session.source = "claude"
         session.termBundleId = "com.googlecode.iterm2"
         session.itermSessionId = "w0t0p0:1234-5678"
 
+        XCTAssertTrue(SessionChatView.SessionMessageBarSupport.canShow(for: session))
+    }
+
+    func testMessageBarStaysHiddenForITerm2WithoutSessionId() {
+        var session = SessionSnapshot()
+        session.source = "claude"
+        session.termBundleId = "com.googlecode.iterm2"
+        // No itermSessionId — targeting would be ambiguous, so we refuse rather than guess.
+
         XCTAssertFalse(SessionChatView.SessionMessageBarSupport.canShow(for: session))
+    }
+
+    func testMessageBarIsAvailableForClaudeInTerminalAppWithTTY() {
+        var session = SessionSnapshot()
+        session.source = "claude"
+        session.termBundleId = "com.apple.Terminal"
+        session.ttyPath = "/dev/ttys001"
+
+        XCTAssertTrue(SessionChatView.SessionMessageBarSupport.canShow(for: session))
+    }
+
+    func testMessageBarIsAvailableForClaudeInKittyWithWindowId() {
+        var session = SessionSnapshot()
+        session.source = "claude"
+        session.termBundleId = "net.kovidgoyal.kitty"
+        session.kittyWindowId = "42"
+
+        XCTAssertTrue(SessionChatView.SessionMessageBarSupport.canShow(for: session))
     }
 
     func testMessageBarIsAvailableForCodexWithTmux() {
@@ -70,8 +106,8 @@ final class SessionChatDisplayReconcilerTests: XCTestCase {
     func testMessageBarStaysHiddenForCodexInUnsupportedTerminal() {
         var session = SessionSnapshot()
         session.source = "codex"
-        session.termBundleId = "com.googlecode.iterm2"
-        session.itermSessionId = "w0t0p0:1234-5678"
+        session.termBundleId = "dev.warp.Warp-Stable"
+        session.ttyPath = "/dev/ttys001"
 
         XCTAssertFalse(SessionChatView.SessionMessageBarSupport.canShow(for: session))
     }

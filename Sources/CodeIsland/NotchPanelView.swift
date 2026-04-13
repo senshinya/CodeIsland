@@ -1686,6 +1686,8 @@ private struct CompletionCardContent: View {
                     }
                     SessionChatView.SessionMessageInputBar(
                         session: session,
+                        sessionId: sessionId,
+                        appState: appState,
                         fontSize: CGFloat(contentFontSize),
                         onFocusChange: { appState.setMessageInputFocused($0) },
                         onSubmitText: { text in

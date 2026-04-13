@@ -47,6 +47,8 @@ final class AppState {
     /// Auto-collapse timer fired but mouse is inside panel — defer collapse until mouse leaves
     var deferCollapseOnMouseLeave = false
     var isMessageInputFocused = false
+    /// Per-session unsent input drafts — survive View teardown when switching surfaces.
+    var pendingInputText: [String: String] = [:]
     private var processMonitors: [String: (source: DispatchSourceProcess, process: ProcessIdentity)] = [:]
     private var exitingSessions: [String: ProcessIdentity] = [:]
     private var saveTimer: Timer?
@@ -378,6 +380,7 @@ final class AppState {
         stopMonitor(sessionId)
         exitingSessions.removeValue(forKey: sessionId)
         modelReadRetryAt.removeValue(forKey: sessionId)
+        pendingInputText.removeValue(forKey: sessionId)
         completionQueue.removeAll { $0 == sessionId }
         if activeSessionId == sessionId {
             activeSessionId = mostActiveSessionId()

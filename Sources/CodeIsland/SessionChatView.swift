@@ -90,6 +90,8 @@ struct SessionChatView: View {
             if SessionMessageBarSupport.canShow(for: session) {
                 SessionMessageInputBar(
                     session: session,
+                    sessionId: sessionId,
+                    appState: appState,
                     fontSize: fontSize,
                     onFocusChange: { appState.setMessageInputFocused($0) },
                     onSubmitText: { sendMessage($0) }
@@ -835,6 +837,8 @@ enum SessionMessageBarSupport {
 
 struct SessionMessageInputBar: View {
     let session: SessionSnapshot
+    let sessionId: String
+    var appState: AppState
     let fontSize: CGFloat
     var onFocusChange: ((Bool) -> Void)? = nil
     var onSubmitText: ((String) -> Void)? = nil
@@ -842,14 +846,30 @@ struct SessionMessageInputBar: View {
     var outerTopPadding: CGFloat = 10
     var outerBottomPadding: CGFloat = 14
 
-    @State private var messageInput = ""
     @State private var inputFocusRequest = 0
+
+    /// Draft lives on AppState so it survives when the view is torn down (e.g. session list
+    /// toggle, chat↔approval swap). Prior to this we used `@State` and lost the in-progress
+    /// message every time SwiftUI recreated the view.
+    private var messageInputBinding: Binding<String> {
+        Binding(
+            get: { appState.pendingInputText[sessionId] ?? "" },
+            set: { appState.pendingInputText[sessionId] = $0 }
+        )
+    }
+
+    private var placeholderText: String {
+        switch session.source {
+        case "codex": return L10n.shared["chat_placeholder_codex"]
+        default: return L10n.shared["chat_placeholder"]
+        }
+    }
 
     var body: some View {
         ChatInputEditor(
-            text: $messageInput,
+            text: messageInputBinding,
             font: .monospacedSystemFont(ofSize: fontSize + 1, weight: .regular),
-            placeholderText: L10n.shared["chat_placeholder"],
+            placeholderText: placeholderText,
             focusRequest: inputFocusRequest,
             onSubmit: submitMessage,
             onFocusChange: onFocusChange
@@ -881,14 +901,15 @@ struct SessionMessageInputBar: View {
     }
 
     private func submitMessage() {
-        let text = messageInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = (appState.pendingInputText[sessionId] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        messageInput = ""
+        appState.pendingInputText[sessionId] = ""
         if let onSubmitText {
             onSubmitText(text)
         } else {
             Task.detached {
-                await MessageSender.send(text, to: session)
+                await MessageSender.send(text, to: session, sessionId: sessionId)
             }
         }
     }
@@ -908,7 +929,7 @@ struct SessionMessageInputBar: View {
     }
 
     private func renderMarkdown(_ text: String) -> AttributedString {
-        ChatMessageTextFormatter.inlineMarkdown(text)
+        ChatMessageTextFormatter.blockMarkdown(text)
     }
 }
 
@@ -1448,12 +1469,16 @@ enum MessageSender {
         case tmux(pane: String, tmuxEnv: String?)
         case kaku(paneId: String?, tty: String?, cwd: String?)
         case ghostty(tty: String?, cwd: String?)
+        case iterm2(itermSessionId: String, tty: String?)
+        case terminalApp(tty: String)
+        case wezterm(tty: String?, cwd: String?)
+        case kitty(windowId: String)
     }
 
     static func supportedTransport(for session: SessionSnapshot) -> Transport? {
         guard session.isClaude || session.isCodex else { return nil }
         // Priority: tmux first — tmux send-keys is more reliable than routing through
-        // the host terminal, even when that host is Kaku/Ghostty.
+        // the host terminal, even when that host is Kaku/Ghostty/iTerm2/etc.
         if let pane = session.tmuxPane?.trimmingCharacters(in: .whitespacesAndNewlines),
            !pane.isEmpty {
             return .tmux(pane: pane, tmuxEnv: session.tmuxEnv)
@@ -1474,6 +1499,30 @@ enum MessageSender {
                 return .ghostty(tty: tty, cwd: cwd)
             }
         }
+        // iTerm2 — precise targeting requires a session UUID.
+        if termBundleId == "com.googlecode.iterm2" || (termApp?.contains("iterm") ?? false) {
+            if let iid = trimmedNonEmpty(session.itermSessionId) {
+                return .iterm2(itermSessionId: iid, tty: tty)
+            }
+        }
+        // Terminal.app — requires a tty to match the right tab.
+        if termBundleId == "com.apple.terminal" || termApp == "apple_terminal" || termApp == "terminal" {
+            if let tty {
+                return .terminalApp(tty: tty)
+            }
+        }
+        // WezTerm — pane resolved later via `wezterm cli list` using tty/cwd.
+        if termBundleId == "com.github.wez.wezterm" || (termApp?.contains("wezterm") ?? false) {
+            if tty != nil || cwd != nil {
+                return .wezterm(tty: tty, cwd: cwd)
+            }
+        }
+        // kitty — precise targeting requires a KITTY_WINDOW_ID.
+        if termBundleId == "net.kovidgoyal.kitty" || termApp == "kitty" {
+            if let wid = trimmedNonEmpty(session.kittyWindowId) {
+                return .kitty(windowId: wid)
+            }
+        }
         return nil
     }
 
@@ -1488,6 +1537,18 @@ enum MessageSender {
         case let .ghostty(tty, cwd):
             messageLog.info("send transport=ghostty sessionId=\((sessionId ?? "-"), privacy: .public) tty=\((tty ?? "-"), privacy: .public) cwd=\((cwd ?? "-"), privacy: .public)")
             await sendViaGhostty(text, tty: tty, cwd: cwd, sessionId: sessionId)
+        case let .iterm2(iid, tty):
+            messageLog.info("send transport=iterm2 iid=\(iid, privacy: .public) tty=\((tty ?? "-"), privacy: .public)")
+            await sendViaITerm2(text, itermSessionId: iid, tty: tty)
+        case let .terminalApp(tty):
+            messageLog.info("send transport=terminalApp tty=\(tty, privacy: .public)")
+            await sendViaTerminalApp(text, tty: tty)
+        case let .wezterm(tty, cwd):
+            messageLog.info("send transport=wezterm tty=\((tty ?? "-"), privacy: .public) cwd=\((cwd ?? "-"), privacy: .public)")
+            await sendViaWezTerm(text, tty: tty, cwd: cwd)
+        case let .kitty(windowId):
+            messageLog.info("send transport=kitty windowId=\(windowId, privacy: .public)")
+            await sendViaKitty(text, windowId: windowId)
         case nil:
             messageLog.warning("send transport=none source=\(session.source, privacy: .public)")
             return
@@ -1618,6 +1679,224 @@ enum MessageSender {
         return nil
     }
 
+    private static func findWezTermBinary() -> String? {
+        let candidates = [
+            "/opt/homebrew/bin/wezterm",
+            "/usr/local/bin/wezterm",
+            "/Applications/WezTerm.app/Contents/MacOS/wezterm",
+        ]
+        for p in candidates where FileManager.default.isExecutableFile(atPath: p) {
+            return p
+        }
+        return nil
+    }
+
+    private static func findKittenBinary() -> String? {
+        let candidates = [
+            "/opt/homebrew/bin/kitten",
+            "/usr/local/bin/kitten",
+            "/Applications/kitty.app/Contents/MacOS/kitten",
+        ]
+        for p in candidates where FileManager.default.isExecutableFile(atPath: p) {
+            return p
+        }
+        return nil
+    }
+
+    // MARK: - iTerm2
+
+    /// iTerm2 exposes `write text` on sessions; this is the native TUI-safe input path.
+    /// We target by `unique id` when available (set by the Claude hook via ITERM_SESSION_ID),
+    /// falling back to `tty` matching. Deliberately no "current session" fallback — better
+    /// to noop than type into a random unrelated tab.
+    private static func sendViaITerm2(_ text: String, itermSessionId: String, tty: String?) async {
+        let escapedText = escapeAppleScript(text)
+        let escapedId = escapeAppleScript(itermSessionId)
+        let escapedTTY = escapeAppleScript(tty ?? "")
+        let script = """
+        tell application "iTerm2"
+            set targetSession to missing value
+            repeat with w in windows
+                repeat with t in tabs of w
+                    repeat with s in sessions of t
+                        try
+                            if (unique id of s as text) is "\(escapedId)" then
+                                set targetSession to s
+                                exit repeat
+                            end if
+                        end try
+                    end repeat
+                    if targetSession is not missing value then exit repeat
+                end repeat
+                if targetSession is not missing value then exit repeat
+            end repeat
+
+            if targetSession is missing value and "\(escapedTTY)" is not "" then
+                repeat with w in windows
+                    repeat with t in tabs of w
+                        repeat with s in sessions of t
+                            try
+                                if (tty of s as text) is "\(escapedTTY)" then
+                                    set targetSession to s
+                                    exit repeat
+                                end if
+                            end try
+                        end repeat
+                        if targetSession is not missing value then exit repeat
+                    end repeat
+                    if targetSession is not missing value then exit repeat
+                end repeat
+            end if
+
+            if targetSession is not missing value then
+                tell targetSession to write text "\(escapedText)"
+            end if
+        end tell
+        """
+        do {
+            _ = try await runOsaScript(script)
+            messageLog.info("iterm2 osascript completed")
+        } catch {
+            messageLog.error("iterm2 osascript failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    // MARK: - Terminal.app
+
+    /// Terminal.app's `do script "..." in tab` injects text + newline into the tab's tty.
+    /// Despite the name, when given an existing tab it does NOT spawn a shell — it just
+    /// writes to the pty, which is what we want for the Claude/Codex TUI.
+    private static func sendViaTerminalApp(_ text: String, tty: String) async {
+        let escapedText = escapeAppleScript(text)
+        let escapedTTY = escapeAppleScript(tty)
+        let script = """
+        tell application "Terminal"
+            set targetTab to missing value
+            repeat with w in windows
+                repeat with t in tabs of w
+                    try
+                        if (tty of t as text) is "\(escapedTTY)" then
+                            set targetTab to t
+                            exit repeat
+                        end if
+                    end try
+                end repeat
+                if targetTab is not missing value then exit repeat
+            end repeat
+            if targetTab is not missing value then
+                do script "\(escapedText)" in targetTab
+            end if
+        end tell
+        """
+        do {
+            _ = try await runOsaScript(script)
+            messageLog.info("terminal.app osascript completed")
+        } catch {
+            messageLog.error("terminal.app osascript failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    // MARK: - WezTerm
+
+    /// Resolve a WezTerm pane id by listing panes and matching on tty_name or cwd,
+    /// mirroring the kaku resolver. Returns the pane id as a string for `--pane-id`.
+    private static func resolveWezTermPaneId(wezterm: String, tty: String?, cwd: String?) async -> String? {
+        let output: String
+        do {
+            output = try await shellRun(wezterm, args: ["cli", "list", "--format", "json"])
+        } catch {
+            return nil
+        }
+        guard let data = output.data(using: .utf8),
+              let panes = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return nil
+        }
+
+        func paneIdString(_ pane: [String: Any]) -> String? {
+            if let n = pane["pane_id"] as? Int { return String(n) }
+            if let s = pane["pane_id"] as? String { return s }
+            return nil
+        }
+
+        let normalizedTTY = normalizeTTYPath(tty)
+        if let normalizedTTY {
+            for pane in panes {
+                if let ptty = pane["tty_name"] as? String, ptty == normalizedTTY,
+                   let id = paneIdString(pane) {
+                    return id
+                }
+            }
+        }
+
+        if let targetCwd = trimmedNonEmpty(cwd).map({ stripTrailingSlashes($0) }) {
+            for pane in panes {
+                guard let raw = pane["cwd"] as? String else { continue }
+                var path = raw
+                if path.hasPrefix("file://") {
+                    path = String(path.dropFirst("file://".count))
+                }
+                // wezterm cwds often include a trailing host component — strip it
+                if let qIdx = path.firstIndex(of: "?") { path = String(path[..<qIdx]) }
+                path = stripTrailingSlashes(path)
+                if path == targetCwd, let id = paneIdString(pane) {
+                    return id
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private static func sendViaWezTerm(_ text: String, tty: String?, cwd: String?) async {
+        guard let wezterm = findWezTermBinary() else {
+            messageLog.error("wezterm binary not found")
+            return
+        }
+        guard let paneId = await resolveWezTermPaneId(wezterm: wezterm, tty: tty, cwd: cwd) else {
+            messageLog.error("wezterm: no pane id resolvable (tty=\((tty ?? "-"), privacy: .public))")
+            return
+        }
+
+        // Single-shot: --no-paste writes raw bytes to the pane's pty, so the trailing \r
+        // is delivered as a keypress rather than getting wrapped in bracketed-paste framing.
+        // Skips the two-step dance that bracketed-paste requires.
+        do {
+            _ = try await shellRunWithStdin(
+                wezterm,
+                args: ["cli", "send-text", "--pane-id", paneId, "--no-paste"],
+                stdin: text + "\r"
+            )
+        } catch {
+            messageLog.error("wezterm send-text failed: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        messageLog.info("wezterm send completed paneId=\(paneId, privacy: .public)")
+    }
+
+    // MARK: - kitty
+
+    private static func sendViaKitty(_ text: String, windowId: String) async {
+        guard let kitten = findKittenBinary() else {
+            messageLog.error("kitten binary not found")
+            return
+        }
+
+        // stdin form (matches kaku / wezterm): `kitten @ send-text --match id:<N> --stdin`
+        // reads the payload from stdin, which sidesteps argv size limits and keeps the
+        // message body out of `ps` output. Trailing \r submits.
+        do {
+            _ = try await shellRunWithStdin(
+                kitten,
+                args: ["@", "send-text", "--match", "id:\(windowId)", "--stdin"],
+                stdin: text + "\r"
+            )
+        } catch {
+            messageLog.error("kitty send-text failed: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        messageLog.info("kitty send completed windowId=\(windowId, privacy: .public)")
+    }
+
     private static func sendViaKaku(_ text: String, paneId: String?, tty: String?, cwd: String?) async {
         guard let kaku = findKakuBinary() else {
             messageLog.error("kaku binary not found")
@@ -1634,33 +1913,19 @@ enum MessageSender {
             return
         }
 
-        // Send the message as a bracketed paste via stdin (avoids shell escape issues).
+        // Single-shot: --no-paste writes raw bytes straight to the pane's pty. The
+        // trailing \r is delivered as a keypress instead of being wrapped in bracketed
+        // paste framing, so one call submits the message without the old two-step dance.
         // Intentionally skip `activate-pane`: send-text addresses the pane by id via the
         // mux, so we don't need (or want) to steal focus away from the user's current tab.
         do {
             _ = try await shellRunWithStdin(
                 kaku,
-                args: ["cli", "send-text", "--pane-id", resolvedPaneId],
-                stdin: text
+                args: ["cli", "send-text", "--pane-id", resolvedPaneId, "--no-paste"],
+                stdin: text + "\r"
             )
         } catch {
             messageLog.error("kaku send-text failed: \(error.localizedDescription, privacy: .public)")
-            return
-        }
-
-        // Give the TUI time to fully exit bracketed-paste mode before sending Enter;
-        // without this the CR is absorbed into the paste buffer as a newline.
-        try? await Task.sleep(nanoseconds: 200_000_000)
-
-        // Submit with a carriage return outside bracketed-paste mode.
-        do {
-            _ = try await shellRunWithStdin(
-                kaku,
-                args: ["cli", "send-text", "--pane-id", resolvedPaneId, "--no-paste"],
-                stdin: "\r"
-            )
-        } catch {
-            messageLog.error("kaku send-text (enter) failed: \(error.localizedDescription, privacy: .public)")
             return
         }
         messageLog.info("kaku send completed pane=\(resolvedPaneId, privacy: .public)")
