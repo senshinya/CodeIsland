@@ -133,32 +133,44 @@ struct SessionChatView: View {
         // wait in the queue until the user leaves chat (drain-on-leave in AppState).
         if let permission = appState.pendingPermission,
            (permission.event.sessionId ?? "default") == sessionId {
-            ApprovalBar(
-                tool: permission.event.toolName ?? "Unknown",
-                toolInput: permission.event.toolInput,
-                queuePosition: 1,
-                queueTotal: appState.permissionQueue.count,
-                onAllow: { withAnimation(NotchAnimation.open) { appState.approvePermission(always: false) } },
-                onAlwaysAllow: { withAnimation(NotchAnimation.open) { appState.approvePermission(always: true) } },
-                onDeny: { withAnimation(NotchAnimation.open) { appState.denyPermission() } },
-                onBypass: { withAnimation(NotchAnimation.open) { appState.bypassPermission() } }
-            )
+            VStack(spacing: 0) {
+                Line()
+                    .stroke(.white.opacity(0.15), style: StrokeStyle(lineWidth: 0.5, dash: [4, 3]))
+                    .frame(height: 0.5)
+                    .padding(.horizontal, 12)
+                ApprovalBar(
+                    tool: permission.event.toolName ?? "Unknown",
+                    toolInput: permission.event.toolInput,
+                    queuePosition: 1,
+                    queueTotal: appState.permissionQueue.count,
+                    onAllow: { withAnimation(NotchAnimation.open) { appState.approvePermission(always: false) } },
+                    onAlwaysAllow: { withAnimation(NotchAnimation.open) { appState.approvePermission(always: true) } },
+                    onDeny: { withAnimation(NotchAnimation.open) { appState.denyPermission() } },
+                    onBypass: { withAnimation(NotchAnimation.open) { appState.bypassPermission() } }
+                )
+            }
             .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .bottom)))
         } else if let q = appState.pendingQuestion,
                   (q.event.sessionId ?? "default") == sessionId {
-            QuestionBar(
-                question: q.question.question,
-                options: q.question.options,
-                descriptions: q.question.descriptions,
-                allQuestions: q.askUserQuestionState?.items ?? [],
-                sessionSource: session.source,
-                sessionContext: session.cwd,
-                queuePosition: 1,
-                queueTotal: appState.questionQueue.count,
-                onAnswer: { answer in withAnimation(NotchAnimation.open) { appState.answerQuestion(answer) } },
-                onAnswerMulti: { answers in withAnimation(NotchAnimation.open) { appState.answerQuestionMulti(answers) } },
-                onSkip: { withAnimation(NotchAnimation.open) { appState.skipQuestion() } }
-            )
+            VStack(spacing: 0) {
+                Line()
+                    .stroke(.white.opacity(0.15), style: StrokeStyle(lineWidth: 0.5, dash: [4, 3]))
+                    .frame(height: 0.5)
+                    .padding(.horizontal, 12)
+                QuestionBar(
+                    question: q.question.question,
+                    options: q.question.options,
+                    descriptions: q.question.descriptions,
+                    allQuestions: q.askUserQuestionState?.items ?? [],
+                    sessionSource: session.source,
+                    sessionContext: session.cwd,
+                    queuePosition: 1,
+                    queueTotal: appState.questionQueue.count,
+                    onAnswer: { answer in withAnimation(NotchAnimation.open) { appState.answerQuestion(answer) } },
+                    onAnswerMulti: { answers in withAnimation(NotchAnimation.open) { appState.answerQuestionMulti(answers) } },
+                    onSkip: { withAnimation(NotchAnimation.open) { appState.skipQuestion() } }
+                )
+            }
             .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .bottom)))
         } else if SessionMessageBarSupport.canShow(for: session) {
             SessionMessageInputBar(
