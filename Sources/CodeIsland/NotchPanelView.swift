@@ -883,7 +883,7 @@ private struct IdleIndicatorBar: View {
 
 // MARK: - Approval Bar (below notch, auto-expanded)
 
-private struct ApprovalBar: View {
+struct ApprovalBar: View {
     let tool: String
     let toolInput: [String: Any]?
     let queuePosition: Int
@@ -1114,7 +1114,7 @@ private struct ApprovalBar: View {
 
 // MARK: - Question Bar (below notch, auto-expanded)
 
-private struct QuestionBar: View {
+struct QuestionBar: View {
     let question: String
     let options: [String]?
     let descriptions: [String]?
@@ -2537,7 +2537,7 @@ private struct PixelText: View {
     }
 }
 
-private struct Line: Shape {
+struct Line: Shape {
     func path(in rect: CGRect) -> Path {
         var p = Path()
         p.move(to: CGPoint(x: rect.minX, y: rect.midY))

@@ -46,6 +46,7 @@ struct SessionChatView: View {
     @State private var pendingPinnedScroll = false
     @State private var isPerformingProgrammaticScroll = false
     @State private var programmaticScrollResetTask: Task<Void, Never>?
+    @State private var inlineCompletionAutoDismissTask: Task<Void, Never>?
     @StateObject private var scrollController = SessionChatScrollController()
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
     @AppStorage(SettingsKey.maxPanelHeight) private var maxPanelHeight = SettingsDefaults.maxPanelHeight
@@ -112,9 +113,11 @@ struct SessionChatView: View {
         .onDisappear {
             scrollToBottomTask?.cancel()
             initialContentRevealTask?.cancel()
+            inlineCompletionAutoDismissTask?.cancel()
             isPerformingProgrammaticScroll = false
             stopWatchingTranscript()
             appState.setMessageInputFocused(false)
+            appState.clearInlineCompletion(for: sessionId)
         }
         .onChange(of: session.providerSessionId) { _, _ in
             refreshTranscriptBindingIfNeeded()
@@ -127,11 +130,53 @@ struct SessionChatView: View {
     // MARK: - Header
 
     @ViewBuilder
+    private var inlineCompletionHint: some View {
+        VStack(spacing: 0) {
+            Line()
+                .stroke(.white.opacity(0.15), style: StrokeStyle(lineWidth: 0.5, dash: [4, 3]))
+                .frame(height: 0.5)
+                .padding(.horizontal, 12)
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(newMessagesAccent)
+                    .frame(width: 5, height: 5)
+                Text(L10n.shared["chat_turn_complete"])
+                    .font(.system(size: fontSize - 1, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.55))
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 18)
+            .frame(height: 20)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(NotchAnimation.open) {
+                    appState.clearInlineCompletion(for: sessionId)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
     private var bottomBar: some View {
-        // Priority: inline permission → inline question → message input bar → nothing.
+        // Priority: inline completion hint → inline permission → inline question → message input bar → nothing.
         // Only items belonging to this session render inline; other-session items
         // wait in the queue until the user leaves chat (drain-on-leave in AppState).
-        if let permission = appState.pendingPermission,
+        if shouldShowInlineCompletionHint {
+            VStack(spacing: 0) {
+                inlineCompletionHint
+                if SessionMessageBarSupport.canShow(for: session) {
+                    SessionMessageInputBar(
+                        session: session,
+                        sessionId: sessionId,
+                        appState: appState,
+                        fontSize: fontSize,
+                        onFocusChange: { appState.setMessageInputFocused($0) },
+                        onSubmitText: { sendMessage($0) }
+                    )
+                }
+            }
+            .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .bottom)))
+        } else if let permission = appState.pendingPermission,
            (permission.event.sessionId ?? "default") == sessionId {
             VStack(spacing: 0) {
                 Line()
@@ -305,10 +350,16 @@ struct SessionChatView: View {
                     scrollController.showNewMessagesButton(
                         count: newMessageCount,
                         accentColor: NSColor(newMessagesAccent),
-                        fontSize: fontSize
+                        fontSize: fontSize,
+                        completionPulse: isCompletionPulseActive
                     )
                 } else {
                     scrollController.hideNewMessagesButton()
+                    // User scrolled back to bottom → pill went away, also clear
+                    // the completion flag so the pulse won't reappear next time.
+                    if appState.inlineCompletionSessionId == sessionId {
+                        appState.clearInlineCompletion(for: sessionId)
+                    }
                 }
             }
             .onChange(of: newMessageCount) { _, count in
@@ -316,8 +367,40 @@ struct SessionChatView: View {
                     scrollController.showNewMessagesButton(
                         count: count,
                         accentColor: NSColor(newMessagesAccent),
-                        fontSize: fontSize
+                        fontSize: fontSize,
+                        completionPulse: isCompletionPulseActive
                     )
+                }
+            }
+            .onChange(of: appState.inlineCompletionSessionId) { _, newValue in
+                // Re-paint the pill when completion arrives/clears mid-display.
+                if shouldShowNewMessagesButton {
+                    scrollController.showNewMessagesButton(
+                        count: newMessageCount,
+                        accentColor: NSColor(newMessagesAccent),
+                        fontSize: fontSize,
+                        completionPulse: isCompletionPulseActive
+                    )
+                }
+                // Start/refresh the 6s auto-dismiss timer for state A (pinned).
+                inlineCompletionAutoDismissTask?.cancel()
+                if newValue == sessionId && isPinnedToBottom {
+                    inlineCompletionAutoDismissTask = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 6_000_000_000)
+                        guard !Task.isCancelled else { return }
+                        appState.clearInlineCompletion(for: sessionId)
+                    }
+                }
+            }
+            .onChange(of: isPinnedToBottom) { _, pinned in
+                // Transitioning between A and B — restart or cancel the timer.
+                inlineCompletionAutoDismissTask?.cancel()
+                if pinned && appState.inlineCompletionSessionId == sessionId {
+                    inlineCompletionAutoDismissTask = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 6_000_000_000)
+                        guard !Task.isCancelled else { return }
+                        appState.clearInlineCompletion(for: sessionId)
+                    }
                 }
             }
             .onChange(of: visibleMessages) { _, _ in
@@ -552,7 +635,23 @@ struct SessionChatView: View {
     }
 
     private var shouldShowNewMessagesButton: Bool {
-        hasCompletedInitialScroll && !isPinnedToBottom && newMessageCount > 0
+        hasCompletedInitialScroll && !isPinnedToBottom
+    }
+
+    /// Inline completion hint (state A): user is pinned to bottom and a completion
+    /// arrived for this session. State B (not pinned) piggy-backs on the existing
+    /// floating "N new messages" pill via `completionPulse`.
+    private var shouldShowInlineCompletionHint: Bool {
+        guard appState.inlineCompletionSessionId == sessionId else { return false }
+        guard isPinnedToBottom else { return false }
+        // Don't steal bottomBar real estate from Approval/Question cards.
+        if let p = appState.pendingPermission, (p.event.sessionId ?? "default") == sessionId { return false }
+        if let q = appState.pendingQuestion, (q.event.sessionId ?? "default") == sessionId { return false }
+        return true
+    }
+
+    private var isCompletionPulseActive: Bool {
+        appState.inlineCompletionSessionId == sessionId && !isPinnedToBottom
     }
 
     // MARK: - Message Rows
@@ -1170,7 +1269,7 @@ final class SessionChatScrollController: ObservableObject {
     // An AppKit NSButton added via addFloatingSubview IS returned by hitTest,
     // and HoverBlockingContainerView.mouseDown forwards the event to it.
 
-    func showNewMessagesButton(count: Int, accentColor: NSColor, fontSize: CGFloat) {
+    func showNewMessagesButton(count: Int, accentColor: NSColor, fontSize: CGFloat, completionPulse: Bool = false) {
         guard let scrollView else { return }
 
         if floatingButton == nil {
@@ -1186,15 +1285,27 @@ final class SessionChatScrollController: ObservableObject {
         }
 
         guard let btn = floatingButton else { return }
-        let title = String(format: L10n.shared["chat_new_messages_count"], count)
+        let baseTitle = count > 0
+            ? String(format: L10n.shared["chat_new_messages_count"], count)
+            : "\(L10n.shared["chat_scroll_to_bottom"])  ↓"
         let font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .semibold)
-        let attrStr = NSAttributedString(
-            string: title,
+        let attrStr = NSMutableAttributedString()
+        if completionPulse {
+            attrStr.append(NSAttributedString(
+                string: "●  ",
+                attributes: [
+                    .font: font,
+                    .foregroundColor: accentColor.withAlphaComponent(0.95),
+                ]
+            ))
+        }
+        attrStr.append(NSAttributedString(
+            string: baseTitle,
             attributes: [
                 .font: font,
                 .foregroundColor: NSColor.white.withAlphaComponent(0.96),
             ]
-        )
+        ))
         btn.attributedTitle = attrStr
         btn.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.78).cgColor
         btn.layer?.borderColor = accentColor.withAlphaComponent(0.55).cgColor

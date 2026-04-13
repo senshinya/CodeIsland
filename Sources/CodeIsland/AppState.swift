@@ -37,6 +37,11 @@ final class AppState {
     var retainedCompletionSessionId: String?
     var retainedCompletionSession: SessionSnapshot?
 
+    /// Set when a completion event arrives while the user is already viewing
+    /// that session's chat panel. The chat view renders an inline hint instead
+    /// of routing the completion through the notch surface queue.
+    var inlineCompletionSessionId: String?
+
     private var maxHistory: Int { SettingsManager.shared.maxToolHistory }
     private var cleanupTimer: Timer?
     private var autoCollapseTask: Task<Void, Never>?
@@ -382,6 +387,9 @@ final class AppState {
         modelReadRetryAt.removeValue(forKey: sessionId)
         pendingInputText.removeValue(forKey: sessionId)
         completionQueue.removeAll { $0 == sessionId }
+        if inlineCompletionSessionId == sessionId {
+            inlineCompletionSessionId = nil
+        }
         if activeSessionId == sessionId {
             activeSessionId = mostActiveSessionId()
         }
@@ -540,8 +548,14 @@ final class AppState {
     }
 
     private func enqueueCompletion(_ sessionId: String) {
-        // User is already viewing this session's chat — no need to notify
-        if case .chatHistory(let sid) = surface, sid == sessionId { return }
+        // User is already viewing this session's chat — surface an inline hint
+        // (rendered by SessionChatView) instead of routing through the queue.
+        if case .chatHistory(let sid) = surface, sid == sessionId {
+            withAnimation(NotchAnimation.open) {
+                inlineCompletionSessionId = sessionId
+            }
+            return
+        }
         // Don't queue duplicates
         if completionQueue.contains(sessionId) || justCompletedSessionId == sessionId { return }
 
@@ -616,6 +630,13 @@ final class AppState {
         }
         completionAutoCollapseDeadline = Date().addingTimeInterval(5)
         scheduleCompletionAutoCollapse(after: 5)
+    }
+
+    func clearInlineCompletion(for sessionId: String) {
+        guard inlineCompletionSessionId == sessionId else { return }
+        withAnimation(NotchAnimation.open) {
+            inlineCompletionSessionId = nil
+        }
     }
 
     func cancelCompletionQueue() {

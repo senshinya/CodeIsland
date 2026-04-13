@@ -231,6 +231,8 @@ final class L10n: ObservableObject {
         "chat_placeholder": "Message Claude…",
         "chat_placeholder_codex": "Message Codex…",
         "chat_new_messages_count": "%d new messages",
+        "chat_scroll_to_bottom": "scroll to bottom",
+        "chat_turn_complete": "turn complete",
     ]
 
     private static let zh: [String: String] = [
@@ -433,5 +435,7 @@ final class L10n: ObservableObject {
         "chat_placeholder": "发送消息给 Claude…",
         "chat_placeholder_codex": "发送消息给 Codex…",
         "chat_new_messages_count": "%d 条新消息",
+        "chat_scroll_to_bottom": "滚动到底部",
+        "chat_turn_complete": "回合结束",
     ]
 }
