@@ -31,6 +31,7 @@ public struct SessionSnapshot {
     public var itermSessionId: String?  // iTerm2 session ID for direct activation
     public var ttyPath: String?         // /dev/ttys00X
     public var kittyWindowId: String?   // Kitty window ID for precise focus
+    public var kakuPaneId: String?      // Kaku (wezterm fork) pane id from WEZTERM_PANE
     public var tmuxPane: String?        // tmux pane identifier (%0, %1, etc.)
     public var tmuxClientTty: String?   // tmux client TTY for real terminal detection
     public var tmuxEnv: String?         // raw TMUX env var (socket info for non-default tmux server)
@@ -501,6 +502,7 @@ public func reduceEvent(
         if let ses = event.rawJSON["_iterm_session"] as? String, !ses.isEmpty { sessions[sessionId]?.itermSessionId = ses }
         if let tty = event.rawJSON["_tty"] as? String, !tty.isEmpty { sessions[sessionId]?.ttyPath = tty }
         if let kitty = event.rawJSON["_kitty_window"] as? String, !kitty.isEmpty { sessions[sessionId]?.kittyWindowId = kitty }
+        if let kakuPane = event.rawJSON["_kaku_pane_id"] as? String, !kakuPane.isEmpty { sessions[sessionId]?.kakuPaneId = kakuPane }
         if let pane = event.rawJSON["_tmux_pane"] as? String, !pane.isEmpty { sessions[sessionId]?.tmuxPane = pane }
         if let tmuxTty = event.rawJSON["_tmux_client_tty"] as? String, !tmuxTty.isEmpty { sessions[sessionId]?.tmuxClientTty = tmuxTty }
         if let tmux = event.rawJSON["_tmux"] as? String, !tmux.isEmpty { sessions[sessionId]?.tmuxEnv = tmux }
@@ -623,6 +625,9 @@ public func extractMetadata(into sessions: inout [String: SessionSnapshot], sess
     if let kitty = event.rawJSON["_kitty_window"] as? String, !kitty.isEmpty {
         sessions[sessionId]?.kittyWindowId = kitty
     }
+    if let kakuPane = event.rawJSON["_kaku_pane_id"] as? String, !kakuPane.isEmpty {
+        sessions[sessionId]?.kakuPaneId = kakuPane
+    }
     if let pane = event.rawJSON["_tmux_pane"] as? String, !pane.isEmpty {
         sessions[sessionId]?.tmuxPane = pane
     }
@@ -663,6 +668,10 @@ public func extractMetadata(into sessions: inout [String: SessionSnapshot], sess
         if sessions[sessionId]?.kittyWindowId == nil,
            let kitty = env["KITTY_WINDOW_ID"], !kitty.isEmpty {
             sessions[sessionId]?.kittyWindowId = kitty
+        }
+        if sessions[sessionId]?.kakuPaneId == nil,
+           let kakuPane = env["WEZTERM_PANE"], !kakuPane.isEmpty {
+            sessions[sessionId]?.kakuPaneId = kakuPane
         }
         if sessions[sessionId]?.tmuxPane == nil,
            let pane = env["TMUX_PANE"], !pane.isEmpty {

@@ -1446,11 +1446,14 @@ private final class ChatInputTextView: NSTextView {
 enum MessageSender {
     enum Transport {
         case tmux(pane: String, tmuxEnv: String?)
+        case kaku(paneId: String?, tty: String?, cwd: String?)
         case ghostty(tty: String?, cwd: String?)
     }
 
     static func supportedTransport(for session: SessionSnapshot) -> Transport? {
         guard session.isClaude || session.isCodex else { return nil }
+        // Priority: tmux first — tmux send-keys is more reliable than routing through
+        // the host terminal, even when that host is Kaku/Ghostty.
         if let pane = session.tmuxPane?.trimmingCharacters(in: .whitespacesAndNewlines),
            !pane.isEmpty {
             return .tmux(pane: pane, tmuxEnv: session.tmuxEnv)
@@ -1460,6 +1463,12 @@ enum MessageSender {
         let termBundleId = session.termBundleId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let termApp = session.termApp?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
+        if termBundleId == "fun.tw93.kaku" || termApp == "kaku" {
+            let paneId = trimmedNonEmpty(session.kakuPaneId)
+            if paneId != nil || tty != nil || cwd != nil {
+                return .kaku(paneId: paneId, tty: tty, cwd: cwd)
+            }
+        }
         if termBundleId == "com.mitchellh.ghostty" || termApp == "ghostty" {
             if tty != nil || cwd != nil {
                 return .ghostty(tty: tty, cwd: cwd)
@@ -1473,6 +1482,9 @@ enum MessageSender {
         case let .tmux(pane, tmuxEnv):
             messageLog.info("send transport=tmux pane=\(pane, privacy: .public)")
             await sendViaTmux(text, pane: pane, tmuxEnv: tmuxEnv)
+        case let .kaku(paneId, tty, cwd):
+            messageLog.info("send transport=kaku paneId=\((paneId ?? "-"), privacy: .public) tty=\((tty ?? "-"), privacy: .public)")
+            await sendViaKaku(text, paneId: paneId, tty: tty, cwd: cwd)
         case let .ghostty(tty, cwd):
             messageLog.info("send transport=ghostty sessionId=\((sessionId ?? "-"), privacy: .public) tty=\((tty ?? "-"), privacy: .public) cwd=\((cwd ?? "-"), privacy: .public)")
             await sendViaGhostty(text, tty: tty, cwd: cwd, sessionId: sessionId)
@@ -1590,6 +1602,132 @@ enum MessageSender {
             if FileManager.default.isExecutableFile(atPath: p) { return p }
         }
         return nil
+    }
+
+    private static func findKakuBinary() -> String? {
+        let home = NSHomeDirectory()
+        let candidates = [
+            "\(home)/.config/kaku/zsh/bin/kaku",
+            "/usr/local/bin/kaku",
+            "/opt/homebrew/bin/kaku",
+            "/Applications/Kaku.app/Contents/MacOS/kaku",
+        ]
+        for p in candidates where FileManager.default.isExecutableFile(atPath: p) {
+            return p
+        }
+        return nil
+    }
+
+    private static func sendViaKaku(_ text: String, paneId: String?, tty: String?, cwd: String?) async {
+        guard let kaku = findKakuBinary() else {
+            messageLog.error("kaku binary not found")
+            return
+        }
+
+        let resolvedPaneId: String
+        if let explicit = paneId?.trimmingCharacters(in: .whitespacesAndNewlines), !explicit.isEmpty {
+            resolvedPaneId = explicit
+        } else if let matched = await resolveKakuPaneIdFromList(kaku: kaku, tty: tty, cwd: cwd) {
+            resolvedPaneId = matched
+        } else {
+            messageLog.error("kaku: no pane id resolvable (tty=\((tty ?? "-"), privacy: .public))")
+            return
+        }
+
+        // Send the message as a bracketed paste via stdin (avoids shell escape issues).
+        // Intentionally skip `activate-pane`: send-text addresses the pane by id via the
+        // mux, so we don't need (or want) to steal focus away from the user's current tab.
+        do {
+            _ = try await shellRunWithStdin(
+                kaku,
+                args: ["cli", "send-text", "--pane-id", resolvedPaneId],
+                stdin: text
+            )
+        } catch {
+            messageLog.error("kaku send-text failed: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+
+        // Give the TUI time to fully exit bracketed-paste mode before sending Enter;
+        // without this the CR is absorbed into the paste buffer as a newline.
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        // Submit with a carriage return outside bracketed-paste mode.
+        do {
+            _ = try await shellRunWithStdin(
+                kaku,
+                args: ["cli", "send-text", "--pane-id", resolvedPaneId, "--no-paste"],
+                stdin: "\r"
+            )
+        } catch {
+            messageLog.error("kaku send-text (enter) failed: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        messageLog.info("kaku send completed pane=\(resolvedPaneId, privacy: .public)")
+    }
+
+    private static func resolveKakuPaneIdFromList(kaku: String, tty: String?, cwd: String?) async -> String? {
+        let output: String
+        do {
+            output = try await shellRun(kaku, args: ["cli", "list", "--format", "json"])
+        } catch {
+            return nil
+        }
+        guard let data = output.data(using: .utf8),
+              let panes = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return nil
+        }
+
+        func paneIdString(_ pane: [String: Any]) -> String? {
+            if let n = pane["pane_id"] as? Int { return String(n) }
+            if let s = pane["pane_id"] as? String { return s }
+            return nil
+        }
+
+        let normalizedTTY = normalizeTTYPath(tty)
+        if let normalizedTTY {
+            for pane in panes {
+                if let ptty = pane["tty_name"] as? String, ptty == normalizedTTY,
+                   let id = paneIdString(pane) {
+                    return id
+                }
+            }
+        }
+
+        let targetCwd = trimmedNonEmpty(cwd).map { stripTrailingSlashes($0) }
+        if let targetCwd {
+            for pane in panes {
+                guard let raw = pane["cwd"] as? String else { continue }
+                var path = raw
+                if path.hasPrefix("file://") {
+                    path = String(path.dropFirst("file://".count))
+                }
+                path = stripTrailingSlashes(path)
+                if path == targetCwd, let id = paneIdString(pane) {
+                    return id
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private static func shellRunWithStdin(_ path: String, args: [String], stdin: String) async throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = args
+        let stdoutPipe = Pipe()
+        let stdinPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = Pipe()
+        process.standardInput = stdinPipe
+        try process.run()
+        if let data = stdin.data(using: .utf8) {
+            stdinPipe.fileHandleForWriting.write(data)
+        }
+        try? stdinPipe.fileHandleForWriting.close()
+        process.waitUntilExit()
+        return String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
     }
 
     private static func shellRun(_ path: String, args: [String]) async throws -> String {

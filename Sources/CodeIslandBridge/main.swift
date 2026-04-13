@@ -290,6 +290,11 @@ if let kitty = envValue("KITTY_WINDOW_ID", override: "CODEISLAND_KITTY_WINDOW_ID
     json["_kitty_window"] = kitty
 }
 
+// Kaku pane — Kaku is a wezterm fork and exports WEZTERM_PANE
+if let kakuPane = envValue("WEZTERM_PANE", override: "CODEISLAND_KAKU_PANE", in: env) {
+    json["_kaku_pane_id"] = kakuPane
+}
+
 // tmux detection — deep info collection
 if let tmux = envValue("TMUX", override: "CODEISLAND_TMUX", in: env) {
     json["_tmux"] = tmux
