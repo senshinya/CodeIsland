@@ -1,6 +1,7 @@
 import SwiftUI
 import CodeIslandCore
 import Darwin
+import MarkdownUI
 import os.log
 
 private let messageLog = Logger(subsystem: "com.codeisland", category: "MessageSender")
@@ -517,16 +518,122 @@ struct SessionChatView: View {
                 .font(.system(size: max(7, fontSize * 0.62), weight: .regular, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.82))
                 .padding(.top, 4)
-            Text(renderMarkdown(chatStripDirectives(text)))
-                .font(.system(size: fontSize + 2, weight: .regular, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.9))
-                .lineLimit(nil)
-                .lineSpacing(4)
+            Markdown(chatStripDirectives(text))
+                .markdownTheme(pixelMarkdownTheme)
+                .markdownSoftBreakMode(.lineBreak)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 16)
         }
         .padding(.top, 8)
         .padding(.bottom, 8)
+    }
+
+    /// Pixel-style MarkdownUI theme — monospaced throughout, white on dark, tight spacing.
+    /// Tracks `fontSize` so settings changes propagate.
+    private var pixelMarkdownTheme: Theme {
+        let base = fontSize + 2
+        return Theme()
+            .text {
+                FontFamilyVariant(.monospaced)
+                FontSize(base)
+                ForegroundColor(.white.opacity(0.9))
+            }
+            .code {
+                FontFamilyVariant(.monospaced)
+                FontSize(.em(0.95))
+                BackgroundColor(.white.opacity(0.12))
+                ForegroundColor(Color(red: 0.95, green: 0.82, blue: 0.55))
+            }
+            .strong {
+                FontWeight(.bold)
+                ForegroundColor(.white.opacity(0.98))
+            }
+            .emphasis {
+                FontStyle(.italic)
+            }
+            .link {
+                ForegroundColor(Color(red: 0.46, green: 0.78, blue: 1.0))
+                UnderlineStyle(.single)
+            }
+            .heading1 { configuration in
+                configuration.label
+                    .markdownTextStyle {
+                        FontWeight(.bold)
+                        FontSize(.em(1.25))
+                    }
+                    .markdownMargin(top: 10, bottom: 6)
+            }
+            .heading2 { configuration in
+                configuration.label
+                    .markdownTextStyle {
+                        FontWeight(.bold)
+                        FontSize(.em(1.15))
+                    }
+                    .markdownMargin(top: 10, bottom: 6)
+            }
+            .heading3 { configuration in
+                configuration.label
+                    .markdownTextStyle {
+                        FontWeight(.semibold)
+                        FontSize(.em(1.05))
+                    }
+                    .markdownMargin(top: 8, bottom: 4)
+            }
+            .paragraph { configuration in
+                configuration.label
+                    .lineSpacing(4)
+                    .markdownMargin(top: 0, bottom: 6)
+            }
+            .codeBlock { configuration in
+                configuration.label
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .markdownTextStyle {
+                        FontFamilyVariant(.monospaced)
+                        FontSize(.em(0.92))
+                        ForegroundColor(.white.opacity(0.92))
+                    }
+                    .background(Color.white.opacity(0.06))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
+                    )
+                    .markdownMargin(top: 6, bottom: 6)
+            }
+            .listItem { configuration in
+                configuration.label
+                    .markdownMargin(top: 2, bottom: 2)
+            }
+            .blockquote { configuration in
+                configuration.label
+                    .padding(.leading, 10)
+                    .overlay(alignment: .leading) {
+                        Rectangle()
+                            .fill(Color.white.opacity(0.25))
+                            .frame(width: 2)
+                    }
+                    .markdownTextStyle {
+                        ForegroundColor(.white.opacity(0.7))
+                        FontStyle(.italic)
+                    }
+                    .markdownMargin(top: 6, bottom: 6)
+            }
+            .table { configuration in
+                configuration.label
+                    .markdownTableBackgroundStyle(
+                        .alternatingRows(Color.clear, Color.white.opacity(0.03))
+                    )
+                    .markdownTableBorderStyle(
+                        .init(color: .white.opacity(0.15))
+                    )
+                    .markdownMargin(top: 6, bottom: 6)
+            }
+            .thematicBreak {
+                Divider()
+                    .overlay(Color.white.opacity(0.15))
+                    .markdownMargin(top: 8, bottom: 8)
+            }
     }
 
     /// Tool call — same level as assistant, bold tool name
@@ -928,9 +1035,6 @@ struct SessionMessageInputBar: View {
         }
     }
 
-    private func renderMarkdown(_ text: String) -> AttributedString {
-        ChatMessageTextFormatter.blockMarkdown(text)
-    }
 }
 
 struct DisplayedChatMessage: Identifiable, Equatable {
