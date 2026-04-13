@@ -43,6 +43,29 @@ final class SessionChatDisplayReconcilerTests: XCTestCase {
         XCTAssertTrue(SessionChatView.SessionMessageBarSupport.canShow(for: session))
     }
 
+    func testSupportedTransportSkipsTTYResolutionForKakuWhenCwdIsEnough() {
+        var session = SessionSnapshot()
+        session.source = "claude"
+        session.termBundleId = "fun.tw93.kaku"
+        session.cwd = "/Users/shinya/Downloads/CodeIsland"
+
+        var ttyResolverCallCount = 0
+        guard case let .kaku(paneId, tty, cwd) = MessageSender.supportedTransport(
+            for: session,
+            ttyResolver: {
+                ttyResolverCallCount += 1
+                return "/dev/ttys999"
+            }
+        ) else {
+            return XCTFail("Expected Kaku transport")
+        }
+
+        XCTAssertNil(paneId)
+        XCTAssertNil(tty)
+        XCTAssertEqual(cwd, session.cwd)
+        XCTAssertEqual(ttyResolverCallCount, 0)
+    }
+
     func testMessageBarPrefersTmuxOverGhosttyWhenBothAreAvailable() {
         var session = SessionSnapshot()
         session.source = "claude"
@@ -90,6 +113,26 @@ final class SessionChatDisplayReconcilerTests: XCTestCase {
         session.ttyPath = "/dev/ttys001"
 
         XCTAssertTrue(SessionChatView.SessionMessageBarSupport.canShow(for: session))
+    }
+
+    func testSupportedTransportResolvesTTYForTerminalAppWhenNeeded() {
+        var session = SessionSnapshot()
+        session.source = "claude"
+        session.termBundleId = "com.apple.Terminal"
+
+        var ttyResolverCallCount = 0
+        guard case let .terminalApp(tty) = MessageSender.supportedTransport(
+            for: session,
+            ttyResolver: {
+                ttyResolverCallCount += 1
+                return "ttys007"
+            }
+        ) else {
+            return XCTFail("Expected Terminal.app transport")
+        }
+
+        XCTAssertEqual(tty, "/dev/ttys007")
+        XCTAssertEqual(ttyResolverCallCount, 1)
     }
 
     func testMessageBarIsAvailableForClaudeInKittyWithWindowId() {

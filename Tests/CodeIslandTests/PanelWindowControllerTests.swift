@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import CodeIsland
 
@@ -29,5 +30,30 @@ final class PanelWindowControllerTests: XCTestCase {
         XCTAssertEqual(frames.incoming.origin.x, newFrame.origin.x)
         XCTAssertEqual(frames.incoming.origin.y, newFrame.origin.y + 30)
         XCTAssertEqual(frames.incoming.size, newFrame.size)
+    }
+
+    func testHostedSwiftUIViewDoesNotStayActiveGestureTarget() {
+        let hostingView = NSHostingView(rootView: Text("Hello"))
+
+        XCTAssertTrue(PanelMouseEventRouting.isHostedSwiftUIView(hostingView))
+        XCTAssertNil(PanelMouseEventRouting.continuedGestureTarget(for: hostingView))
+        XCTAssertNil(PanelMouseEventRouting.scrollTarget(for: hostingView))
+    }
+
+    func testTextViewInsideHostingViewRemainsEligibleForContinuedForwarding() {
+        let hostingView = NSHostingView(rootView: Text("Hello"))
+        let textView = NSTextView(frame: .zero)
+        hostingView.addSubview(textView)
+
+        XCTAssertTrue(PanelMouseEventRouting.isHostedSwiftUIView(textView))
+        XCTAssertTrue(PanelMouseEventRouting.continuedGestureTarget(for: textView) === textView)
+        XCTAssertTrue(PanelMouseEventRouting.scrollTarget(for: textView) === textView)
+    }
+
+    func testScrollerRemainsEligibleForGestureAndScrollForwarding() {
+        let scroller = NSScroller(frame: .zero)
+
+        XCTAssertTrue(PanelMouseEventRouting.continuedGestureTarget(for: scroller) === scroller)
+        XCTAssertTrue(PanelMouseEventRouting.scrollTarget(for: scroller) === scroller)
     }
 }

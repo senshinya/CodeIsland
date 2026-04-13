@@ -77,11 +77,67 @@ private class NotchHostingView<Content: View>: NSHostingView<Content> {
     }
 }
 
+enum PanelMouseEventRouting {
+    static func continuedGestureTarget(for view: NSView?) -> NSView? {
+        guard let view else { return nil }
+        if let textView = view as? NSTextView { return textView }
+        if let scroller = view as? NSScroller { return scroller }
+        if let control = view as? NSControl { return control }
+        if let scrollView = view as? NSScrollView { return scrollView }
+        if let clipView = view as? NSClipView,
+           let scrollView = clipView.superview as? NSScrollView {
+            return scrollView
+        }
+        return nil
+    }
+
+    static func scrollTarget(for view: NSView?) -> NSView? {
+        guard let view else { return nil }
+        if let textView = view as? NSTextView {
+            return textView.enclosingScrollView ?? textView
+        }
+        if let scroller = view as? NSScroller { return scroller }
+        if let scrollView = view as? NSScrollView { return scrollView }
+        if let clipView = view as? NSClipView,
+           let scrollView = clipView.superview as? NSScrollView {
+            return scrollView
+        }
+        if let scrollView = view.enclosingScrollView {
+            return scrollView
+        }
+        guard !isHostedSwiftUIView(view) else { return nil }
+        return view
+    }
+
+    static func isHostedSwiftUIView(_ view: NSView) -> Bool {
+        var currentView: NSView? = view
+        while let view = currentView {
+            if classChainContainsHostingView(type(of: view)) {
+                return true
+            }
+            currentView = view.superview
+        }
+        return false
+    }
+
+    private static func classChainContainsHostingView(_ cls: AnyClass?) -> Bool {
+        var currentClass: AnyClass? = cls
+        while let current = currentClass {
+            if NSStringFromClass(current).contains("NSHostingView") {
+                return true
+            }
+            currentClass = class_getSuperclass(current)
+        }
+        return false
+    }
+}
+
 private final class HoverBlockingContainerView<Content: View>: NSView {
     let hostingView: NotchHostingView<Content>
     let appState: AppState
     private var blockingTrackingArea: NSTrackingArea?
     private var isHandlingMouseDown = false
+    private var isHandlingMouseUp = false
     private weak var activeMouseTarget: NSView?
 
     init(hostingView: NotchHostingView<Content>, appState: AppState) {
@@ -176,17 +232,27 @@ private final class HoverBlockingContainerView<Content: View>: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        defer { activeMouseTarget = nil }
-        if let activeMouseTarget {
-            activeMouseTarget.mouseUp(with: event)
+        guard !isHandlingMouseUp else {
+            super.mouseUp(with: event)
+            return
+        }
+        isHandlingMouseUp = true
+        defer { isHandlingMouseUp = false }
+
+        let target = activeMouseTarget
+        activeMouseTarget = nil
+        if let target {
+            target.mouseUp(with: event)
         } else {
             super.mouseUp(with: event)
         }
     }
 
     override func scrollWheel(with event: NSEvent) {
-        if let hitView = forwardedHitView(at: event.locationInWindow) {
-            hitView.scrollWheel(with: event)
+        if let scrollTarget = PanelMouseEventRouting.scrollTarget(
+            for: forwardedHitView(at: event.locationInWindow)
+        ) {
+            scrollTarget.scrollWheel(with: event)
         } else {
             super.scrollWheel(with: event)
         }
@@ -197,7 +263,7 @@ private final class HoverBlockingContainerView<Content: View>: NSView {
         // Forward to the actual hit-tested view so AppKit controls
         // (NSButton, NSTextField, NSScroller, etc.) receive the full gesture.
         if let hitView = forwardedHitView(at: event.locationInWindow) {
-            activeMouseTarget = hitView
+            activeMouseTarget = PanelMouseEventRouting.continuedGestureTarget(for: hitView)
             hitView.mouseDown(with: event)
         } else {
             activeMouseTarget = nil

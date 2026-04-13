@@ -96,16 +96,7 @@ struct SessionChatView: View {
                 messageList
             }
 
-            if SessionMessageBarSupport.canShow(for: session) {
-                SessionMessageInputBar(
-                    session: session,
-                    sessionId: sessionId,
-                    appState: appState,
-                    fontSize: fontSize,
-                    onFocusChange: { appState.setMessageInputFocused($0) },
-                    onSubmitText: { sendMessage($0) }
-                )
-            }
+            bottomBar
         }
         .onAppear {
             hasCompletedInitialScroll = false
@@ -134,6 +125,53 @@ struct SessionChatView: View {
     }
 
     // MARK: - Header
+
+    @ViewBuilder
+    private var bottomBar: some View {
+        // Priority: inline permission → inline question → message input bar → nothing.
+        // Only items belonging to this session render inline; other-session items
+        // wait in the queue until the user leaves chat (drain-on-leave in AppState).
+        if let permission = appState.pendingPermission,
+           (permission.event.sessionId ?? "default") == sessionId {
+            ApprovalBar(
+                tool: permission.event.toolName ?? "Unknown",
+                toolInput: permission.event.toolInput,
+                queuePosition: 1,
+                queueTotal: appState.permissionQueue.count,
+                onAllow: { withAnimation(NotchAnimation.open) { appState.approvePermission(always: false) } },
+                onAlwaysAllow: { withAnimation(NotchAnimation.open) { appState.approvePermission(always: true) } },
+                onDeny: { withAnimation(NotchAnimation.open) { appState.denyPermission() } },
+                onBypass: { withAnimation(NotchAnimation.open) { appState.bypassPermission() } }
+            )
+            .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .bottom)))
+        } else if let q = appState.pendingQuestion,
+                  (q.event.sessionId ?? "default") == sessionId {
+            QuestionBar(
+                question: q.question.question,
+                options: q.question.options,
+                descriptions: q.question.descriptions,
+                allQuestions: q.askUserQuestionState?.items ?? [],
+                sessionSource: session.source,
+                sessionContext: session.cwd,
+                queuePosition: 1,
+                queueTotal: appState.questionQueue.count,
+                onAnswer: { answer in withAnimation(NotchAnimation.open) { appState.answerQuestion(answer) } },
+                onAnswerMulti: { answers in withAnimation(NotchAnimation.open) { appState.answerQuestionMulti(answers) } },
+                onSkip: { withAnimation(NotchAnimation.open) { appState.skipQuestion() } }
+            )
+            .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .bottom)))
+        } else if SessionMessageBarSupport.canShow(for: session) {
+            SessionMessageInputBar(
+                session: session,
+                sessionId: sessionId,
+                appState: appState,
+                fontSize: fontSize,
+                onFocusChange: { appState.setMessageInputFocused($0) },
+                onSubmitText: { sendMessage($0) }
+            )
+            .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .bottom)))
+        }
+    }
 
     private var headerBar: some View {
         ZStack {
@@ -965,7 +1003,7 @@ struct SessionChatView: View {
 
 enum SessionMessageBarSupport {
     static func canShow(for session: SessionSnapshot) -> Bool {
-        MessageSender.supportedTransport(for: session) != nil
+        MessageSender.supportedTransport(for: session, resolveTTYIfNeeded: false) != nil
     }
 }
 
@@ -1679,7 +1717,11 @@ enum MessageSender {
         case kitty(windowId: String)
     }
 
-    static func supportedTransport(for session: SessionSnapshot) -> Transport? {
+    static func supportedTransport(
+        for session: SessionSnapshot,
+        resolveTTYIfNeeded: Bool = true,
+        ttyResolver: (() -> String?)? = nil
+    ) -> Transport? {
         guard session.isClaude || session.isCodex else { return nil }
         // Priority: tmux first — tmux send-keys is more reliable than routing through
         // the host terminal, even when that host is Kaku/Ghostty/iTerm2/etc.
@@ -1687,18 +1729,32 @@ enum MessageSender {
            !pane.isEmpty {
             return .tmux(pane: pane, tmuxEnv: session.tmuxEnv)
         }
-        let tty = resolvedTTYPath(session: session)
         let cwd = trimmedNonEmpty(session.cwd)
         let termBundleId = session.termBundleId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let termApp = session.termApp?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let rawTTY = normalizeTTYPath(session.ttyPath)
+        var cachedTTY = rawTTY
+        var didResolveTTY = rawTTY != nil
+
+        func tty() -> String? {
+            if let cachedTTY {
+                return cachedTTY
+            }
+            guard resolveTTYIfNeeded, !didResolveTTY else { return nil }
+            didResolveTTY = true
+            cachedTTY = normalizeTTYPath(ttyResolver?() ?? resolvedTTYPath(session: session))
+            return cachedTTY
+        }
 
         if termBundleId == "fun.tw93.kaku" || termApp == "kaku" {
             let paneId = trimmedNonEmpty(session.kakuPaneId)
+            let tty = rawTTY ?? ((paneId == nil && cwd == nil) ? tty() : nil)
             if paneId != nil || tty != nil || cwd != nil {
                 return .kaku(paneId: paneId, tty: tty, cwd: cwd)
             }
         }
         if termBundleId == "com.mitchellh.ghostty" || termApp == "ghostty" {
+            let tty = rawTTY ?? (cwd == nil ? tty() : nil)
             if tty != nil || cwd != nil {
                 return .ghostty(tty: tty, cwd: cwd)
             }
@@ -1706,17 +1762,19 @@ enum MessageSender {
         // iTerm2 — precise targeting requires a session UUID.
         if termBundleId == "com.googlecode.iterm2" || (termApp?.contains("iterm") ?? false) {
             if let iid = trimmedNonEmpty(session.itermSessionId) {
-                return .iterm2(itermSessionId: iid, tty: tty)
+                return .iterm2(itermSessionId: iid, tty: rawTTY)
             }
         }
         // Terminal.app — requires a tty to match the right tab.
         if termBundleId == "com.apple.terminal" || termApp == "apple_terminal" || termApp == "terminal" {
+            let tty = rawTTY ?? tty()
             if let tty {
                 return .terminalApp(tty: tty)
             }
         }
         // WezTerm — pane resolved later via `wezterm cli list` using tty/cwd.
         if termBundleId == "com.github.wez.wezterm" || (termApp?.contains("wezterm") ?? false) {
+            let tty = rawTTY ?? (cwd == nil ? tty() : nil)
             if tty != nil || cwd != nil {
                 return .wezterm(tty: tty, cwd: cwd)
             }
