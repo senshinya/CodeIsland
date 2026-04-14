@@ -184,7 +184,7 @@ final class L10n: ObservableObject {
 
         // About
         "about_desc1": "Real-time AI coding agent status panel for macOS",
-        "about_desc2": "Supports 8 CLI/IDE tools via Unix socket IPC",
+        "about_desc2": "Supports Claude Code and Codex via Unix socket IPC",
 
         // Window
         "settings_title": "CodeIsland Settings",
@@ -221,6 +221,7 @@ final class L10n: ObservableObject {
         "status_idle": "Idle",
         "other": "Other",
         "n_sessions": "sessions",
+        "view_all": "View all",
         "scroll_for_more": "Scroll for more",
         "scroll_hidden": "more below",
         "lines": "lines",
@@ -388,7 +389,7 @@ final class L10n: ObservableObject {
 
         // About
         "about_desc1": "macOS 实时 AI 编码 Agent 状态面板",
-        "about_desc2": "通过 Unix socket IPC 支持 8 种 CLI/IDE 工具",
+        "about_desc2": "通过 Unix socket IPC 支持 Claude Code 和 Codex",
 
         // Window
         "settings_title": "CodeIsland 设置",
@@ -425,6 +426,7 @@ final class L10n: ObservableObject {
         "status_idle": "空闲",
         "other": "其他",
         "n_sessions": "个会话",
+        "view_all": "全部",
         "scroll_for_more": "向下滚动查看更多",
         "scroll_hidden": "个未显示",
         "lines": "行",

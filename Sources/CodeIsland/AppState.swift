@@ -28,7 +28,43 @@ final class AppState {
     var pendingQuestion: QuestionRequest? { questionQueue.first }
     /// Preview-only: mock question payload for DebugHarness (no continuation needed)
     var previewQuestionPayload: QuestionPayload?
-    var surface: IslandSurface = .collapsed
+    var surface: IslandSurface = .collapsed {
+        didSet {
+            // Drain-on-leave: when user leaves a chat panel, promote any queued
+            // items that accumulated silently while they were in chat. Also fixes
+            // origin's latent stranding of cross-session completions that were
+            // silently appended via isInteractiveSurfaceLocked.
+            guard !isDrainingSurfaceTransition else { return }
+            guard case .chatHistory = oldValue else { return }
+            if case .chatHistory = surface { return }
+            isDrainingSurfaceTransition = true
+            defer { isDrainingSurfaceTransition = false }
+            if let next = permissionQueue.first {
+                let sid = next.event.sessionId ?? "default"
+                activeSessionId = sid
+                withAnimation(NotchAnimation.open) {
+                    surface = .approvalCard(sessionId: sid)
+                }
+                return
+            }
+            if let next = questionQueue.first {
+                let sid = next.event.sessionId ?? "default"
+                activeSessionId = sid
+                withAnimation(NotchAnimation.open) {
+                    surface = .questionCard(sessionId: sid)
+                }
+                return
+            }
+            if !completionQueue.isEmpty {
+                // Reset the sticky hover flag from any prior completion card so
+                // showNextCompletionOrCollapse doesn't early-return into defer-mode
+                // when we're draining from a non-completion context (chat leave).
+                completionHasBeenEntered = false
+                showNextCompletionOrCollapse()
+            }
+        }
+    }
+    private var isDrainingSurfaceTransition = false
 
     var justCompletedSessionId: String? {
         if case .completionCard(let id) = surface { return id }
@@ -929,28 +965,48 @@ final class AppState {
             sessions[sessionId]?.isYoloMode = Self.detectCursorYoloMode()
         }
 
-        for effect in effects {
-            executeEffect(effect, sessionId: sessionId)
+        // When a completion will animate into .completionCard, every downstream
+        // mutation in this tick (startRotationIfNeeded clearing rotatingSessionId,
+        // refreshDerivedState, etc.) must share the same animation transaction —
+        // otherwise @Observable coalesces the final non-animated mutation over the
+        // animated one and the entrance animation is dropped. This only surfaces
+        // when ≥2 sessions were running because startRotationIfNeeded's else branch
+        // has nothing to mutate in the single-session path.
+        let hasCompletionEffect = effects.contains { effect in
+            if case .enqueueCompletion = effect { return true }
+            return false
         }
 
-        if let provider = sessions[sessionId]?.source,
-           SessionTitleStore.supports(provider: provider) {
-            refreshProviderTitle(for: sessionId)
-        }
-        refreshTranscriptPath(for: sessionId)
-
-        // Handle the "else if activeSessionId == sessionId → mostActive" edge case
-        // (reducer can't check activeSessionId since it's AppState-local)
-        if sessions[sessionId]?.status == .idle && activeSessionId == sessionId {
-            let eventName = EventNormalizer.normalize(event.eventName)
-            if eventName != "Stop" {
-                activeSessionId = mostActiveSessionId()
+        let runPostReducerTail: () -> Void = { [self] in
+            for effect in effects {
+                executeEffect(effect, sessionId: sessionId)
             }
+
+            if let provider = sessions[sessionId]?.source,
+               SessionTitleStore.supports(provider: provider) {
+                refreshProviderTitle(for: sessionId)
+            }
+            refreshTranscriptPath(for: sessionId)
+
+            // Handle the "else if activeSessionId == sessionId → mostActive" edge case
+            // (reducer can't check activeSessionId since it's AppState-local)
+            if sessions[sessionId]?.status == .idle && activeSessionId == sessionId {
+                let eventName = EventNormalizer.normalize(event.eventName)
+                if eventName != "Stop" {
+                    activeSessionId = mostActiveSessionId()
+                }
+            }
+
+            scheduleSave()
+            startRotationIfNeeded()
+            refreshDerivedState()
         }
 
-        scheduleSave()
-        startRotationIfNeeded()
-        refreshDerivedState()
+        if hasCompletionEffect {
+            withAnimation(NotchAnimation.pop, runPostReducerTail)
+        } else {
+            runPostReducerTail()
+        }
     }
 
     private func executeEffect(_ effect: SideEffect, sessionId: String) {
@@ -1014,8 +1070,15 @@ final class AppState {
         let request = PermissionRequest(event: event, continuation: continuation)
         permissionQueue.append(request)
 
-        // Show UI only if this is the first (or only) queued item
-        if permissionQueue.count == 1 && !isMessageInputFocused {
+        if case .chatHistory = surface {
+            // In chat: never swap surface. Same-session requests render inline via
+            // SessionChatView's pendingPermission observation; other-session requests
+            // quietly wait in the queue until drain-on-leave.
+            if permissionQueue.count == 1 {
+                activeSessionId = sessionId
+                SoundManager.shared.handleEvent("PermissionRequest")
+            }
+        } else if permissionQueue.count == 1 && !isMessageInputFocused {
             activeSessionId = sessionId
             surface = .approvalCard(sessionId: sessionId)
             SoundManager.shared.handleEvent("PermissionRequest")
@@ -1118,7 +1181,12 @@ final class AppState {
         let request = QuestionRequest(event: event, question: question, continuation: continuation)
         questionQueue.append(request)
 
-        if questionQueue.count == 1 && !isMessageInputFocused {
+        if case .chatHistory = surface {
+            if questionQueue.count == 1 {
+                activeSessionId = sessionId
+                SoundManager.shared.handleEvent("PermissionRequest")
+            }
+        } else if questionQueue.count == 1 && !isMessageInputFocused {
             activeSessionId = sessionId
             withAnimation(NotchAnimation.open) {
                 surface = .questionCard(sessionId: sessionId)
@@ -1219,7 +1287,12 @@ final class AppState {
         )
         questionQueue.append(request)
 
-        if questionQueue.count == 1 && !isMessageInputFocused {
+        if case .chatHistory = surface {
+            if questionQueue.count == 1 {
+                activeSessionId = sessionId
+                SoundManager.shared.handleEvent("PermissionRequest")
+            }
+        } else if questionQueue.count == 1 && !isMessageInputFocused {
             activeSessionId = sessionId
             withAnimation(NotchAnimation.open) {
                 surface = .questionCard(sessionId: sessionId)
@@ -1377,6 +1450,13 @@ final class AppState {
     /// After dequeuing, show next pending item or collapse
     @discardableResult
     private func showNextPending() -> Bool {
+        // In chat: never switch surface. Same-session next item auto-renders
+        // inline via SessionChatView observation; other-session items wait for
+        // drain-on-leave. Without this short-circuit, processEvent's post-drain
+        // showNextPending call at :922 would yank chat to approvalCard/questionCard.
+        if case .chatHistory = surface {
+            return !permissionQueue.isEmpty || !questionQueue.isEmpty
+        }
         if let next = permissionQueue.first {
             let sid = next.event.sessionId ?? "default"
             activeSessionId = sid
@@ -1387,10 +1467,22 @@ final class AppState {
             activeSessionId = sid
             surface = .questionCard(sessionId: sid)
             return true
-        } else if case .approvalCard = surface {
-            surface = .collapsed
-        } else if case .questionCard = surface {
-            surface = .collapsed
+        } else {
+            // Queues empty. If we just dismissed an approval/question card, drain
+            // any stranded completions before collapsing. Without this, completions
+            // silently appended via isInteractiveSurfaceLocked (chat, approval, or
+            // question card) would be orphaned after the blocking surface dismisses.
+            switch surface {
+            case .approvalCard, .questionCard:
+                if !completionQueue.isEmpty {
+                    completionHasBeenEntered = false
+                    showNextCompletionOrCollapse()
+                } else {
+                    surface = .collapsed
+                }
+            default:
+                break
+            }
         }
         return false
     }

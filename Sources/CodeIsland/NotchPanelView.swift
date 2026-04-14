@@ -1969,7 +1969,7 @@ private struct SessionsExpandLink: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Rectangle().fill(.white.opacity(0.15)).frame(height: 1)
-                Text("\(count) \(L10n.shared["n_sessions"])")
+                Text("\(L10n.shared["view_all"]) \(count) \(L10n.shared["n_sessions"])")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(.white.opacity(hovering ? 0.7 : 0.45))
                 Image(systemName: "chevron.down")
