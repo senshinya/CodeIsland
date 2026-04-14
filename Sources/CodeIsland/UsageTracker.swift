@@ -7,6 +7,10 @@ final class UsageTracker: ObservableObject {
     static let shared = UsageTracker()
     private static let log = Logger(subsystem: "com.codeisland", category: "UsageTracker")
 
+    private enum UsageFetchError: Error {
+        case http(status: Int, body: String)
+    }
+
     struct UsageWindow {
         var utilization: Double = 0    // percentage 0–100
         var resetsAt: Date = .distantPast
@@ -83,11 +87,15 @@ final class UsageTracker: ObservableObject {
                     self.resetRetryState()
                     Self.log.info("Usage fetch succeeded fiveHour=\(usage.fiveHour.utilization, privacy: .public) sevenDay=\(usage.sevenDay.utilization, privacy: .public)")
                 }
-            } catch let error as URLError where error.code == .userAuthenticationRequired {
-                // Token may have expired — clear cache so next poll re-reads
-                Self.log.info("Token rejected, clearing cache")
+            } catch let UsageFetchError.http(status, body) {
+                Self.log.error("Usage fetch failed: HTTP \(status, privacy: .public) body=\(body, privacy: .public)")
+                // Any 4xx/5xx: drop cached token so the next retry re-reads from Keychain.
+                // A stale token rotated by the CLI can return 403 (not 401), and we were
+                // getting stuck on the old value forever.
                 cachedToken = nil
-                isAvailable = false
+                if status == 401 || status == 403 {
+                    isAvailable = false
+                }
                 scheduleRetry()
             } catch {
                 Self.log.error("Usage fetch failed: \(error.localizedDescription, privacy: .public)")
@@ -128,7 +136,8 @@ final class UsageTracker: ObservableObject {
 
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-            throw URLError(http.statusCode == 401 ? .userAuthenticationRequired : .badServerResponse)
+            let bodySnippet = String(data: data.prefix(200), encoding: .utf8) ?? ""
+            throw UsageFetchError.http(status: http.statusCode, body: bodySnippet)
         }
 
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
