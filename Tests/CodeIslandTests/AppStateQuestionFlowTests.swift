@@ -59,10 +59,10 @@ final class AppStateQuestionFlowTests: XCTestCase {
         XCTAssertEqual(answers["language"] as? String, "Chinese")
     }
 
-    func testSkipAskUserQuestionReturnsDeny() async throws {
+    func testDismissAskUserQuestionReturnsEmptyResponse() async throws {
         let appState = AppState()
         let event = try makeAskUserQuestionEvent(
-            sessionId: "s-skip",
+            sessionId: "s-dismiss",
             questions: [
                 question(header: "mode", text: "How should I work?", options: ["execute", "plan"]),
             ]
@@ -75,13 +75,14 @@ final class AppStateQuestionFlowTests: XCTestCase {
         }
 
         await Task.yield()
-        appState.skipQuestion()
+        appState.dismissQuestion()
 
         let responseData = await responseTask.value
-        let behavior = try extractPermissionBehavior(from: responseData)
-        XCTAssertEqual(behavior, "deny")
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: responseData) as? [String: Any])
+        XCTAssertNil(json["hookSpecificOutput"])
+        XCTAssertTrue(json.isEmpty)
         XCTAssertEqual(appState.questionQueue.count, 0)
-        XCTAssertEqual(appState.sessions["s-skip"]?.status, .processing)
+        XCTAssertEqual(appState.sessions["s-dismiss"]?.status, .processing)
     }
 
     func testDisconnectDuringAskUserQuestionReturnsDeny() async throws {

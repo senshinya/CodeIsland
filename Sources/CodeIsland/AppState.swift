@@ -1385,18 +1385,36 @@ final class AppState {
         refreshDerivedState()
     }
 
-    func skipQuestion() {
+    /// Dismiss the current question without sending any decision/answer to the CLI.
+    /// Resumes the hook continuation with an empty JSON object so the HTTP connection
+    /// closes cleanly (no leaked continuation) while carrying no hookSpecificOutput —
+    /// the CLI falls through to its own default handling.
+    func dismissQuestion() {
         guard !questionQueue.isEmpty else { return }
         let pending = questionQueue.removeFirst()
-        let responseData: Data
-        if pending.isFromPermission {
-            responseData = Data(#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#.utf8)
-        } else {
-            responseData = Data(#"{"hookSpecificOutput":{"hookEventName":"Notification"}}"#.utf8)
-        }
-        pending.continuation.resume(returning: responseData)
+        pending.continuation.resume(returning: Data("{}".utf8))
         let sessionId = pending.event.sessionId ?? "default"
         sessions[sessionId]?.status = .processing
+
+        showNextPending()
+        refreshDerivedState()
+    }
+
+    /// Dismiss the current permission request without sending any decision to the CLI.
+    /// Same protocol as `dismissQuestion`: empty `{}` response closes the connection
+    /// without influencing the CLI's permission outcome.
+    func dismissPermission() {
+        guard !permissionQueue.isEmpty else { return }
+        let pending = permissionQueue.removeFirst()
+        pending.continuation.resume(returning: Data("{}".utf8))
+        let sessionId = pending.event.sessionId ?? "default"
+        sessions[sessionId]?.status = .processing
+        sessions[sessionId]?.currentTool = nil
+        sessions[sessionId]?.toolDescription = nil
+
+        if activeSessionId == sessionId {
+            activeSessionId = mostActiveSessionId()
+        }
 
         showNextPending()
         refreshDerivedState()

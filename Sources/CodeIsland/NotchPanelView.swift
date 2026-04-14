@@ -149,7 +149,8 @@ struct NotchPanelView: View {
                                 onAllow: { appState.approvePermission(always: false) },
                                 onAlwaysAllow: { appState.approvePermission(always: true) },
                                 onDeny: { appState.denyPermission() },
-                                onBypass: { appState.bypassPermission() }
+                                onBypass: { appState.bypassPermission() },
+                                onDismiss: { appState.dismissPermission() }
                             )
                             .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .top)))
                         }
@@ -167,7 +168,7 @@ struct NotchPanelView: View {
                                 queueTotal: appState.questionQueue.count,
                                 onAnswer: { appState.answerQuestion($0) },
                                 onAnswerMulti: { appState.answerQuestionMulti($0) },
-                                onSkip: { appState.skipQuestion() }
+                                onDismiss: { appState.dismissQuestion() }
                             )
                             .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .top)))
                         } else if let preview = appState.previewQuestionPayload {
@@ -182,7 +183,7 @@ struct NotchPanelView: View {
                                 queueTotal: 1,
                                 onAnswer: { _ in },
                                 onAnswerMulti: { _ in },
-                                onSkip: { }
+                                onDismiss: { }
                             )
                             .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .top)))
                         }
@@ -892,6 +893,7 @@ struct ApprovalBar: View {
     let onAlwaysAllow: () -> Void
     let onDeny: () -> Void
     let onBypass: () -> Void
+    let onDismiss: () -> Void
 
     private var fileName: String? {
         guard let fp = toolInput?["file_path"] as? String else { return nil }
@@ -954,6 +956,7 @@ struct ApprovalBar: View {
                 PixelButton(label: L10n.shared["allow_once"], fg: .black.opacity(0.85), bg: Color(white: 0.88), border: Color(white: 0.7), action: onAllow)
                 PixelButton(label: L10n.shared["always"], fg: .black.opacity(0.85), bg: Color(red: 0.95, green: 0.6, blue: 0.15), border: Color(red: 0.85, green: 0.5, blue: 0.1), action: onAlwaysAllow)
                 PixelButton(label: L10n.shared["bypass"], fg: .white.opacity(0.95), bg: Color(red: 0.72, green: 0.15, blue: 0.15), border: Color(red: 0.6, green: 0.1, blue: 0.1), action: onBypass)
+                PixelButton(label: L10n.shared["dismiss"], fg: .white.opacity(0.6), bg: Color.white.opacity(0.06), border: Color.white.opacity(0.12), action: onDismiss)
             }
             .padding(.horizontal, 14)
         }
@@ -1125,7 +1128,7 @@ struct QuestionBar: View {
     let queueTotal: Int
     let onAnswer: (String) -> Void
     let onAnswerMulti: ([(question: String, answer: String)]) -> Void
-    let onSkip: () -> Void
+    let onDismiss: () -> Void
 
     @State private var textInput = ""
     @FocusState private var isFocused: Bool
@@ -1264,11 +1267,11 @@ struct QuestionBar: View {
                 )
             }
             PixelButton(
-                label: L10n.shared["skip"],
+                label: L10n.shared["dismiss"],
                 fg: .white.opacity(0.6),
                 bg: Color.white.opacity(0.06),
                 border: Color.white.opacity(0.12),
-                action: onSkip
+                action: onDismiss
             )
             if item.multiSelect {
                 PixelButton(
@@ -1403,11 +1406,11 @@ struct QuestionBar: View {
 
         HStack(spacing: 8) {
             PixelButton(
-                label: L10n.shared["skip"],
+                label: L10n.shared["dismiss"],
                 fg: .white.opacity(0.6),
                 bg: Color.white.opacity(0.06),
                 border: Color.white.opacity(0.12),
-                action: onSkip
+                action: onDismiss
             )
             if options == nil || options?.isEmpty == true {
                 PixelButton(

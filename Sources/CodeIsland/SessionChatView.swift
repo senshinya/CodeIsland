@@ -191,7 +191,8 @@ struct SessionChatView: View {
                     onAllow: { withAnimation(NotchAnimation.open) { appState.approvePermission(always: false) } },
                     onAlwaysAllow: { withAnimation(NotchAnimation.open) { appState.approvePermission(always: true) } },
                     onDeny: { withAnimation(NotchAnimation.open) { appState.denyPermission() } },
-                    onBypass: { withAnimation(NotchAnimation.open) { appState.bypassPermission() } }
+                    onBypass: { withAnimation(NotchAnimation.open) { appState.bypassPermission() } },
+                    onDismiss: { withAnimation(NotchAnimation.open) { appState.dismissPermission() } }
                 )
             }
             .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .bottom)))
@@ -213,7 +214,7 @@ struct SessionChatView: View {
                     queueTotal: appState.questionQueue.count,
                     onAnswer: { answer in withAnimation(NotchAnimation.open) { appState.answerQuestion(answer) } },
                     onAnswerMulti: { answers in withAnimation(NotchAnimation.open) { appState.answerQuestionMulti(answers) } },
-                    onSkip: { withAnimation(NotchAnimation.open) { appState.skipQuestion() } }
+                    onDismiss: { withAnimation(NotchAnimation.open) { appState.dismissQuestion() } }
                 )
             }
             .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .bottom)))

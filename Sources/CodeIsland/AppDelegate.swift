@@ -159,7 +159,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case .deny:
             appState.denyPermission()
         case .skipQuestion:
-            appState.skipQuestion()
+            appState.dismissQuestion()
         case .jumpToTerminal:
             if let id = appState.activeSessionId, let session = appState.sessions[id] {
                 TerminalActivator.activate(session: session, sessionId: id)
