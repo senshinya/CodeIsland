@@ -984,8 +984,8 @@ private struct AboutPage: View {
                 }
 
                 HStack(spacing: 12) {
-                    aboutLink("GitHub", icon: "chevron.left.forwardslash.chevron.right", url: "https://github.com/wxtsky/CodeIsland")
-                    aboutLink("Issues", icon: "ladybug", url: "https://github.com/wxtsky/CodeIsland/issues")
+                    aboutLink("GitHub", icon: "chevron.left.forwardslash.chevron.right", url: "https://github.com/senshinya/CodeIsland")
+                    aboutLink("Issues", icon: "ladybug", url: "https://github.com/senshinya/CodeIsland/issues")
                 }
 
                 HStack(spacing: 10) {
