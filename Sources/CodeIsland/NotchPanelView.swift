@@ -258,7 +258,8 @@ struct NotchPanelView: View {
             .onHover { hovering in
                 // Idle indicator hover
                 if showIdleIndicator {
-                    withAnimation(NotchAnimation.micro) { idleHovered = hovering }
+                    let anim = hovering ? NotchAnimation.open : NotchAnimation.close
+                    withAnimation(anim) { idleHovered = hovering }
                     return
                 }
                 switch appState.surface {
@@ -878,7 +879,7 @@ private struct IdleIndicatorBar: View {
             }
         }
         .frame(height: barHeight)
-        .animation(NotchAnimation.micro, value: hovered)
+        .animation(hovered ? NotchAnimation.open : NotchAnimation.close, value: hovered)
     }
 }
 
