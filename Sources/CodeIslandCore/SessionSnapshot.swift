@@ -181,6 +181,7 @@ public struct SessionSnapshot {
 
     /// Bundle IDs of native apps (not terminals)
     private static let appBundleNames: [String: String] = [
+        "com.anthropic.claudefordesktop": "Claude",
         "com.todesktop.230313mzl4w4u92": "Cursor",
         "com.qoder.ide": "Qoder",
         "com.factory.app": "Factory",
@@ -192,6 +193,7 @@ public struct SessionSnapshot {
     /// Maps native app bundle IDs to their expected source identifier.
     /// Used by isNativeAppMode to distinguish "Cursor agent" from "Claude CLI in Cursor terminal".
     private static let appBundleSources: [String: String] = [
+        "com.anthropic.claudefordesktop": "claude",
         "com.todesktop.230313mzl4w4u92": "cursor",
         "com.qoder.ide": "qoder",
         "com.factory.app": "droid",

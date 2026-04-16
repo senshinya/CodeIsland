@@ -36,6 +36,7 @@ struct TerminalActivator {
     /// When termBundleId matches, bring that app to front;
     /// otherwise fall through to terminal tab-matching.
     private static let nativeAppBundles: [String: String] = [
+        "com.anthropic.claudefordesktop": "Claude",
         "com.openai.codex": "Codex",
         "com.todesktop.230313mzl4w4u92": "Cursor",
         "com.qoder.ide": "Qoder",
