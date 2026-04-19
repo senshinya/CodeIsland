@@ -312,6 +312,35 @@ struct ConfigInstaller {
         return result
     }
 
+    /// Serialize `root` with pretty printing, keep `/` unescaped, and ensure a
+    /// trailing newline. Skip the write when the parsed file on disk is already
+    /// semantically equal to what we'd produce — that preserves user-managed
+    /// keys, comments and whitespace whenever we don't actually need to change
+    /// anything.
+    @discardableResult
+    static func writeJSONPreservingUntouched(
+        _ root: [String: Any],
+        at path: String,
+        fm: FileManager
+    ) -> Bool {
+        let options: JSONSerialization.WritingOptions = [
+            .prettyPrinted, .sortedKeys, .withoutEscapingSlashes,
+        ]
+        guard let newData = try? JSONSerialization.data(withJSONObject: root, options: options) else {
+            return false
+        }
+
+        if let existing = parseJSONFile(at: path, fm: fm),
+           let existingCanonical = try? JSONSerialization.data(withJSONObject: existing, options: options),
+           existingCanonical == newData {
+            return true
+        }
+
+        var outData = newData
+        if outData.last != 0x0A { outData.append(0x0A) }
+        return fm.createFile(atPath: path, contents: outData)
+    }
+
     /// Parse a JSON file, stripping JSONC comments first
     private static func parseJSONFile(at path: String, fm: FileManager) -> [String: Any]? {
         guard fm.fileExists(atPath: path),
@@ -337,16 +366,35 @@ struct ConfigInstaller {
     private static func detectClaudeVersion() -> String? {
         if let override = claudeVersionOverride { return override }
         if let cached = cachedClaudeVersion { return cached }
-        // Find claude binary — GUI apps don't inherit user's shell PATH
+        // GUI apps don't inherit the user's shell PATH, so probe common install
+        // locations directly. If more than one claude binary is present, pick the
+        // lowest version — whichever one actually reads settings.json could be the
+        // oldest, and writing hooks it doesn't recognize breaks the whole file.
+        let home = NSHomeDirectory()
         let candidates = [
-            NSHomeDirectory() + "/.local/bin/claude",
+            home + "/.claude/local/bin/claude",
+            home + "/.local/bin/claude",
+            "/opt/homebrew/bin/claude",
             "/usr/local/bin/claude",
+            "/opt/homebrew/opt/claude/bin/claude",
         ]
-        guard let claudePath = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+        let fm = FileManager.default
+        var versions: [String] = []
+        for path in candidates where fm.isExecutableFile(atPath: path) {
+            guard let v = readClaudeVersion(at: path) else { continue }
+            versions.append(v)
+        }
+        guard let lowest = versions.min(by: { !versionAtLeast($0, $1) }) else {
             return nil
         }
+        cachedClaudeVersion = lowest
+        return lowest
+    }
+
+    /// Run `<path> --version` and parse "2.1.92 (Claude Code)" → "2.1.92"
+    private static func readClaudeVersion(at path: String) -> String? {
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: claudePath)
+        proc.executableURL = URL(fileURLWithPath: path)
         proc.arguments = ["--version"]
         let pipe = Pipe()
         proc.standardOutput = pipe
@@ -355,15 +403,13 @@ struct ConfigInstaller {
             try proc.run()
             proc.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let output = String(data: data, encoding: .utf8) {
-                // Parse "2.1.92 (Claude Code)" → "2.1.92"
-                let version = output.trimmingCharacters(in: .whitespacesAndNewlines)
-                    .components(separatedBy: " ").first ?? ""
-                if !version.isEmpty { cachedClaudeVersion = version }
-                return cachedClaudeVersion
-            }
-        } catch {}
-        return nil
+            guard let output = String(data: data, encoding: .utf8) else { return nil }
+            let version = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                .components(separatedBy: " ").first ?? ""
+            return version.isEmpty ? nil : version
+        } catch {
+            return nil
+        }
     }
 
     /// Compare semver strings: returns true if `installed` >= `required`
@@ -417,7 +463,11 @@ struct ConfigInstaller {
                 return hookList.contains { ($0["command"] as? String) == hookCommand }
             }
         }
-        if alreadyInstalled && !hasStaleAsyncKey(hooks) { return true }
+        if alreadyInstalled
+            && !hasStaleAsyncKey(hooks)
+            && !hasStaleIncompatibleEvents(hooks, compatibleEvents: events) {
+            return true
+        }
 
         // Remove all managed hooks first, including legacy Vibe Island entries.
         hooks = removeManagedHookEntries(from: hooks)
@@ -433,10 +483,7 @@ struct ConfigInstaller {
         }
         settings[cli.configKey] = hooks
 
-        guard let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) else {
-            return false
-        }
-        return fm.createFile(atPath: cli.fullPath, contents: data)
+        return writeJSONPreservingUntouched(settings, at: cli.fullPath, fm: fm)
     }
 
     // MARK: - External CLIs (use bridge binary directly)
@@ -491,10 +538,7 @@ struct ConfigInstaller {
         if cli.format == .copilot {
             root["version"] = 1
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]) else {
-            return false
-        }
-        return fm.createFile(atPath: cli.fullPath, contents: data)
+        return writeJSONPreservingUntouched(root, at: cli.fullPath, fm: fm)
     }
 
     // MARK: - Codex config.toml
@@ -548,9 +592,7 @@ struct ConfigInstaller {
         hooks = removeManagedHookEntries(from: hooks)
 
         root[cli.configKey] = hooks.isEmpty ? nil : hooks
-        if let data = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]) {
-            fm.createFile(atPath: cli.fullPath, contents: data)
-        }
+        writeJSONPreservingUntouched(root, at: cli.fullPath, fm: fm)
     }
 
     // MARK: - Detection helpers
@@ -581,6 +623,8 @@ struct ConfigInstaller {
         guard allPresent else { return false }
         // Also check for stale "async" keys that need cleanup
         if hasStaleAsyncKey(hooks) { return false }
+        // Or stale entries under event names the current CLI version rejects
+        if hasStaleIncompatibleEvents(hooks, compatibleEvents: requiredEvents) { return false }
         return true
     }
 
@@ -593,6 +637,22 @@ struct ConfigInstaller {
                     if hookList.contains(where: { $0["async"] != nil }) { return true }
                 }
             }
+        }
+        return false
+    }
+
+    /// Detect our hooks sitting on event names that the running CLI no longer
+    /// accepts (e.g. a PermissionDenied entry written by an older CodeIsland on
+    /// a Claude Code that does not know the event). Triggers a reinstall so
+    /// removeManagedHookEntries can strip them.
+    static func hasStaleIncompatibleEvents(
+        _ hooks: [String: Any],
+        compatibleEvents: [(String, Int, Bool)]
+    ) -> Bool {
+        let compatibleNames = Set(compatibleEvents.map { $0.0 })
+        for (event, value) in hooks where !compatibleNames.contains(event) {
+            guard let entries = value as? [[String: Any]] else { continue }
+            if entries.contains(where: containsOurHook) { return true }
         }
         return false
     }
