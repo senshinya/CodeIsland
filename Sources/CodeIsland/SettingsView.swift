@@ -958,6 +958,7 @@ private struct SoundEventRow: View {
 
 private struct AboutPage: View {
     @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var updater = UpdateChecker.shared
 
     var body: some View {
         VStack {
@@ -987,6 +988,8 @@ private struct AboutPage: View {
                     aboutLink("GitHub", icon: "chevron.left.forwardslash.chevron.right", url: "https://github.com/senshinya/CodeIsland")
                     aboutLink("Issues", icon: "ladybug", url: "https://github.com/senshinya/CodeIsland/issues")
                 }
+
+                updateSection
 
                 HStack(spacing: 10) {
                     Button {
@@ -1018,10 +1021,97 @@ private struct AboutPage: View {
         }
     }
 
-    private func aboutLink(_ title: String, icon: String, url: String) -> some View {
-        Button {
-            if let u = URL(string: url) { NSWorkspace.shared.open(u) }
-        } label: {
+    @ViewBuilder
+    private var updateSection: some View {
+        switch updater.state {
+        case .idle:
+            aboutButton(l10n["check_for_updates"], icon: "arrow.triangle.2.circlepath") {
+                updater.checkForUpdates()
+            }
+
+        case .checking:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text(l10n["check_for_updates"])
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+
+        case .upToDate:
+            Button {
+                updater.checkForUpdates()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .font(.system(size: 13))
+                    Text(String(format: l10n["no_update_body"], AppVersion.current))
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+            .onHover { h in
+                if h { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
+
+        case let .available(version, _, _):
+            VStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .foregroundStyle(.blue)
+                        .font(.system(size: 13))
+                    Text(String(format: l10n["update_available_body"], version, AppVersion.current))
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+
+                aboutButton(l10n["update_now"], icon: "arrow.down.to.line") {
+                    updater.performUpdate()
+                }
+            }
+
+        case let .downloading(progress):
+            VStack(spacing: 6) {
+                Text(l10n["update_downloading"])
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                ProgressView(value: progress)
+                    .frame(width: 200)
+                Text("\(Int(progress * 100))%")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+            }
+
+        case .installing:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text(l10n["update_installing"])
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+
+        case let .failed(message):
+            VStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.system(size: 13))
+                    Text(String(format: l10n["update_failed_body"], message))
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                aboutButton(l10n["update_retry"], icon: "arrow.clockwise") {
+                    updater.checkForUpdates()
+                }
+            }
+        }
+    }
+
+    private func aboutButton(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             HStack(spacing: 5) {
                 Image(systemName: icon)
                     .font(.system(size: 11))
@@ -1039,6 +1129,12 @@ private struct AboutPage: View {
         .buttonStyle(.plain)
         .onHover { h in
             if h { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+    }
+
+    private func aboutLink(_ title: String, icon: String, url: String) -> some View {
+        aboutButton(title, icon: icon) {
+            if let u = URL(string: url) { NSWorkspace.shared.open(u) }
         }
     }
 }

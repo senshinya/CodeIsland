@@ -200,6 +200,16 @@ final class L10n: ObservableObject {
         "quit": "Quit",
         "ok": "OK",
 
+        // Update
+        "check_for_updates": "Check for Updates...",
+        "no_update_body": "CodeIsland %@ is the latest version.",
+        "update_available_body": "CodeIsland %@ is available (current: %@). Would you like to download it?",
+        "update_now": "Update Now",
+        "update_downloading": "Downloading update...",
+        "update_installing": "Installing update...",
+        "update_failed_body": "Could not install the update: %@",
+        "update_retry": "Retry",
+
         // NotchPanel
         "mute": "Mute",
         "enable_sound_tooltip": "Enable Sound",
@@ -407,6 +417,16 @@ final class L10n: ObservableObject {
         "remove_hooks": "卸载 Hooks",
         "quit": "退出",
         "ok": "好",
+
+        // Update
+        "check_for_updates": "检查更新...",
+        "no_update_body": "CodeIsland %@ 已是最新版本。",
+        "update_available_body": "CodeIsland %@ 已发布（当前版本：%@），是否前往下载？",
+        "update_now": "立即更新",
+        "update_downloading": "正在下载更新...",
+        "update_installing": "正在安装更新...",
+        "update_failed_body": "无法安装更新：%@",
+        "update_retry": "重试",
 
         // NotchPanel
         "mute": "静音",
