@@ -662,7 +662,12 @@ class PanelWindowController: NSObject, NSWindowDelegate {
 
         guard SettingsManager.shared.displayChoice == "auto" else { return }
 
-        autoScreenPoller = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+        // Screen-parameter / Space-change / frontmost-app notifications already cover the
+        // common cases. This poller is a fallback for the rare path where a window is
+        // dragged to another display without switching focus — a low cadence is enough
+        // and every tick runs a full CGWindowListCopyWindowInfo, which was measurably
+        // contributing to Energy Impact (#92).
+        autoScreenPoller = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.refreshCurrentScreen()
             }
