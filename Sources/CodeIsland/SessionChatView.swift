@@ -318,6 +318,7 @@ struct SessionChatView: View {
                     ScrollViewLiveScrollObserver { atBottom in
                         guard hasCompletedInitialScroll else { return }
                         guard !isPerformingProgrammaticScroll else { return }
+                        guard !scrollController.isAnimatingScroll else { return }
                         guard !pendingPinnedScroll else { return }
                         scrollToBottomTask?.cancel()
                         pendingPinnedScroll = false
@@ -338,11 +339,17 @@ struct SessionChatView: View {
             .animation(.easeIn(duration: 0.12), value: hasRevealedInitialContent)
             .onAppear {
                 scrollController.onNewMessagesTapped = {
+                    // Optimistically treat the tap as "now pinned" so the floating
+                    // button hides immediately — the spring animation keeps running
+                    // and confirms reachedBottom at the end, un-pinning only if the
+                    // scroll truly failed to land at the bottom.
+                    isPinnedToBottom = true
+                    newMessageCount = 0
                     // settle: true — polls document height stability and re-scrolls on
                     // layout changes, which is required because MarkdownUI lazy rows
                     // grow after the initial scroll jump and would otherwise leave us
                     // stopped short of the real bottom (plus a flash of empty space).
-                    scrollToBottom(with: proxy, delay: nil, verifyBottom: true, settle: true)
+                    scrollToBottom(with: proxy, delay: nil, verifyBottom: true, settle: true, animated: true)
                 }
                 scrollToBottom(with: proxy, isInitial: true)
             }
@@ -414,7 +421,7 @@ struct SessionChatView: View {
                         // the jump exposes the scroll view's dark background before
                         // MarkdownUI blocks finish painting (the "black flash").
                         sendTriggeredScrollSettle = false
-                        scrollToBottom(with: proxy, delay: nil, verifyBottom: true, settle: true)
+                        scrollToBottom(with: proxy, delay: nil, verifyBottom: true, settle: true, animated: true)
                     } else {
                         // Streaming path — cheap fast loop. At this point we're already
                         // near the bottom from the previous scroll, so the rows being
@@ -444,7 +451,8 @@ struct SessionChatView: View {
         isInitial: Bool = false,
         delay: Duration? = .milliseconds(75),
         verifyBottom: Bool = false,
-        settle: Bool = false
+        settle: Bool = false,
+        animated: Bool = false
     ) {
         let wasInitialPending = isInitial || !hasCompletedInitialScroll
         // Initial path already polls for layout stability — reuse the same settle loop
@@ -461,26 +469,49 @@ struct SessionChatView: View {
                 try? await Task.sleep(for: delay)
             }
             guard !Task.isCancelled else { return }
-            performScrollToBottom(with: proxy)
 
-            if shouldSettle {
-                await settleInitialBottomLock(with: proxy)
-                guard !Task.isCancelled else { return }
-                let reachedBottom = await confirmBottomPosition(
-                    with: proxy,
-                    delays: InitialScrollTiming.finalVerificationDelays
-                )
-                guard !Task.isCancelled else { return }
+            if animated {
+                // Spring path: the animator auto-retargets to the current bottom every
+                // tick, so growing MarkdownUI rows keep the spring aimed correctly
+                // instead of leaving us short. Replaces the settle/verify loops.
+                performScrollToBottom(with: proxy, animated: true)
+                while scrollController.isAnimatingScroll {
+                    try? await Task.sleep(for: .milliseconds(16))
+                    guard !Task.isCancelled else { return }
+                }
+                // If the user scrolled during the spring, the live-scroll cancel
+                // already handed control back to them — don't snap them back.
+                if !scrollController.wasSpringInterruptedByUser,
+                   !scrollController.isAtBottom {
+                    performScrollToBottom(with: proxy)
+                }
+                let reachedBottom = scrollController.isAtBottom
                 isPinnedToBottom = reachedBottom
                 if reachedBottom {
                     newMessageCount = 0
                 }
-            } else if verifyBottom {
-                let reachedBottom = await confirmBottomPosition(with: proxy)
-                guard !Task.isCancelled else { return }
-                isPinnedToBottom = reachedBottom
-                if reachedBottom {
-                    newMessageCount = 0
+            } else {
+                performScrollToBottom(with: proxy)
+
+                if shouldSettle {
+                    await settleInitialBottomLock(with: proxy)
+                    guard !Task.isCancelled else { return }
+                    let reachedBottom = await confirmBottomPosition(
+                        with: proxy,
+                        delays: InitialScrollTiming.finalVerificationDelays
+                    )
+                    guard !Task.isCancelled else { return }
+                    isPinnedToBottom = reachedBottom
+                    if reachedBottom {
+                        newMessageCount = 0
+                    }
+                } else if verifyBottom {
+                    let reachedBottom = await confirmBottomPosition(with: proxy)
+                    guard !Task.isCancelled else { return }
+                    isPinnedToBottom = reachedBottom
+                    if reachedBottom {
+                        newMessageCount = 0
+                    }
                 }
             }
 
@@ -490,7 +521,7 @@ struct SessionChatView: View {
                 hasCompletedInitialScroll = true
                 revealInitialContent()
             }
-            if !verifyBottom, !shouldSettle, scrollController.documentHeight != nil {
+            if !animated, !verifyBottom, !shouldSettle, scrollController.documentHeight != nil {
                 isPinnedToBottom = scrollController.isAtBottom
             }
             if isPinnedToBottom {
@@ -607,10 +638,20 @@ struct SessionChatView: View {
         performScrollToBottom(with: proxy)
     }
 
-    private func performScrollToBottom(with proxy: ScrollViewProxy, preferAnchorScroll: Bool = false) {
+    private func performScrollToBottom(
+        with proxy: ScrollViewProxy,
+        preferAnchorScroll: Bool = false,
+        animated: Bool = false
+    ) {
         programmaticScrollResetTask?.cancel()
         isPerformingProgrammaticScroll = true
-        if preferAnchorScroll || !scrollController.scrollToBottom() {
+        let usedAppKit: Bool
+        if preferAnchorScroll {
+            usedAppKit = false
+        } else {
+            usedAppKit = scrollController.scrollToBottom(animated: animated)
+        }
+        if !usedAppKit {
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
@@ -1241,12 +1282,96 @@ struct PendingMessageReconciliation: Equatable {
     let matchedDisplayIDs: [String: String]
 }
 
+/// Drives an NSScrollView to its bottom via a per-frame spring integration.
+/// Target is recomputed every tick so the animation keeps tracking the bottom as
+/// lazily-rendered content grows the document; it terminates only once the spring
+/// is at rest AND the current bottom has stopped moving.
+private final class ScrollSpringAnimator {
+    // Spring params roughly match SwiftUI's .spring(response: 0.45, dampingFraction: 0.85):
+    // slight overshoot, snappy arrival. Y-clamp at maxY hides the overshoot visually.
+    private let stiffness: CGFloat = 200
+    private let damping: CGFloat = 24
+    private let mass: CGFloat = 1.0
+
+    private weak var scrollView: NSScrollView?
+    private var timer: Timer?
+    private var currentY: CGFloat = 0
+    private var velocity: CGFloat = 0
+    private var targetY: CGFloat = 0
+    private var lastTime: CFTimeInterval = 0
+
+    var onFinish: (() -> Void)?
+
+    init(scrollView: NSScrollView) {
+        self.scrollView = scrollView
+    }
+
+    func start(to target: CGFloat) {
+        guard let scrollView else { return }
+        currentY = scrollView.contentView.bounds.origin.y
+        velocity = 0
+        targetY = target
+        lastTime = CACurrentMediaTime()
+
+        let t = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
+            self?.step()
+        }
+        timer = t
+        RunLoop.main.add(t, forMode: .common)
+    }
+
+    func cancel() {
+        guard timer != nil else { return }
+        timer?.invalidate()
+        timer = nil
+        onFinish?()
+    }
+
+    private func step() {
+        guard let scrollView, let documentView = scrollView.documentView else {
+            cancel()
+            return
+        }
+
+        let now = CACurrentMediaTime()
+        // Clamp dt so a stalled main thread doesn't produce a giant integration step.
+        let dt = max(CGFloat(1.0 / 240.0), min(CGFloat(now - lastTime), CGFloat(1.0 / 30.0)))
+        lastTime = now
+
+        let viewportHeight = scrollView.contentView.bounds.height
+        let documentHeight = documentView.bounds.height
+        let maxY = max(0, documentHeight - viewportHeight)
+        // Recompute target every tick — keeps us aimed at the current bottom as
+        // MarkdownUI blocks finish laying out and grow the document.
+        targetY = maxY
+
+        let displacement = currentY - targetY
+        let springForce = -stiffness * displacement
+        let dampingForce = -damping * velocity
+        let acceleration = (springForce + dampingForce) / mass
+        velocity += acceleration * dt
+        currentY += velocity * dt
+
+        let visualY = min(max(currentY, 0), maxY)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: visualY))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+
+        if abs(displacement) < 0.5 && abs(velocity) < 0.5 {
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: targetY))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            cancel()
+        }
+    }
+}
+
 final class SessionChatScrollController: ObservableObject {
     /// Shared threshold for "at bottom" detection — keeps observer and controller consistent.
     static let bottomThreshold: CGFloat = 24
 
     private weak var scrollView: NSScrollView?
     private var floatingButton: NSButton?
+    private var springAnimator: ScrollSpringAnimator?
+    private var liveScrollObserverToken: NSObjectProtocol?
     var onNewMessagesTapped: (() -> Void)?
 
     var documentHeight: CGFloat? {
@@ -1260,8 +1385,41 @@ final class SessionChatScrollController: ObservableObject {
         return visibleMaxY >= documentMaxY - Self.bottomThreshold
     }
 
+    var isAnimatingScroll: Bool { springAnimator != nil }
+
+    /// Set when a live-scroll gesture cancelled the spring. Readers (the waiting
+    /// scrollToBottom Task) use this to skip the follow-up "snap to bottom" and
+    /// avoid fighting the user's scroll input. Cleared when a new animation starts.
+    private(set) var wasSpringInterruptedByUser: Bool = false
+
     func attach(_ scrollView: NSScrollView) {
         self.scrollView = scrollView
+        if let token = liveScrollObserverToken {
+            NotificationCenter.default.removeObserver(token)
+        }
+        // Cancel any in-flight spring the moment the user starts a live scroll
+        // (trackpad pan, scroll wheel) so we don't fight their input.
+        liveScrollObserverToken = NotificationCenter.default.addObserver(
+            forName: NSScrollView.willStartLiveScrollNotification,
+            object: scrollView,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, self.springAnimator != nil else { return }
+            self.wasSpringInterruptedByUser = true
+            self.cancelSpringAnimation()
+        }
+    }
+
+    deinit {
+        if let token = liveScrollObserverToken {
+            NotificationCenter.default.removeObserver(token)
+        }
+        springAnimator?.cancel()
+    }
+
+    private func cancelSpringAnimation() {
+        springAnimator?.cancel()
+        springAnimator = nil
     }
 
     // MARK: - Floating "new messages" button (AppKit-native)
@@ -1332,12 +1490,38 @@ final class SessionChatScrollController: ObservableObject {
     }
 
     @discardableResult
-    func scrollToBottom() -> Bool {
+    func scrollToBottom(animated: Bool = false) -> Bool {
         guard let scrollView, let documentView = scrollView.documentView else { return false }
 
         let viewportHeight = scrollView.contentView.bounds.height
         let documentHeight = documentView.bounds.height
         let targetY = max(0, documentHeight - viewportHeight)
+
+        if animated {
+            if springAnimator == nil {
+                wasSpringInterruptedByUser = false
+                let animator = ScrollSpringAnimator(scrollView: scrollView)
+                animator.onFinish = { [weak self, weak animator] in
+                    // Only clear if still the active animator — guards against late
+                    // callbacks after a cancel + restart.
+                    if self?.springAnimator === animator {
+                        self?.springAnimator = nil
+                    }
+                }
+                springAnimator = animator
+                animator.start(to: targetY)
+            }
+            // Existing animator auto-retargets via its per-tick recompute, so no-op.
+            return true
+        }
+
+        // Non-animated callers during an in-flight spring would normally snap and
+        // interrupt the animation. The animator auto-tracks the current bottom, so
+        // we can safely let it keep running instead of snapping mid-flight.
+        if springAnimator != nil {
+            return true
+        }
+
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: targetY))
         scrollView.reflectScrolledClipView(scrollView.contentView)
         return true
