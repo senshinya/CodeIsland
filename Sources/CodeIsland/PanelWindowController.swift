@@ -138,6 +138,8 @@ private final class HoverBlockingContainerView<Content: View>: NSView {
     private var blockingTrackingArea: NSTrackingArea?
     private var isHandlingMouseDown = false
     private var isHandlingMouseUp = false
+    private var isHandlingMouseDragged = false
+    private var isHandlingScrollWheel = false
     private weak var activeMouseTarget: NSView?
 
     init(hostingView: NotchHostingView<Content>, appState: AppState) {
@@ -224,6 +226,15 @@ private final class HoverBlockingContainerView<Content: View>: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        // Forwarded target may not handle the event and bubble back up the
+        // responder chain into this method; guard against unbounded recursion.
+        guard !isHandlingMouseDragged else {
+            super.mouseDragged(with: event)
+            return
+        }
+        isHandlingMouseDragged = true
+        defer { isHandlingMouseDragged = false }
+
         if let activeMouseTarget {
             activeMouseTarget.mouseDragged(with: event)
         } else {
@@ -249,6 +260,13 @@ private final class HoverBlockingContainerView<Content: View>: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        guard !isHandlingScrollWheel else {
+            super.scrollWheel(with: event)
+            return
+        }
+        isHandlingScrollWheel = true
+        defer { isHandlingScrollWheel = false }
+
         if let scrollTarget = PanelMouseEventRouting.scrollTarget(
             for: forwardedHitView(at: event.locationInWindow)
         ) {
