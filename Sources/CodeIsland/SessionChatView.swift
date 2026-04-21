@@ -19,6 +19,11 @@ struct SessionChatView: View {
         static let finalVerificationDelays = [0, 16, 32, 64, 96]
     }
 
+    /// Delay before the eager messageList is allowed to render after onAppear,
+    /// comfortably past `NotchAnimation.open`'s spring response (0.42s) so
+    /// MarkdownUI's block-view construction doesn't land mid-animation.
+    private static let openAnimationGuardDelay: Duration = .milliseconds(600)
+
     let sessionId: String
     let session: SessionSnapshot
     var appState: AppState
@@ -33,8 +38,13 @@ struct SessionChatView: View {
     @State private var transcriptDiscoveryTask: Task<Void, Never>?
     @State private var scrollToBottomTask: Task<Void, Never>?
     @State private var initialContentRevealTask: Task<Void, Never>?
+    @State private var messageListGateTask: Task<Void, Never>?
     @State private var hasCompletedInitialScroll = false
     @State private var hasRevealedInitialContent = false
+    /// Gates the eager MarkdownUI messageList subtree so its first render
+    /// (which can block the main thread for long assistant messages) lands
+    /// after the NotchAnimation.open spring settles. See `openAnimationGuardDelay`.
+    @State private var canRenderMessageList = false
     @State private var isPinnedToBottom = true
     @State private var newMessageCount = 0
     @State private var shouldAutoScrollOnNextLayout = true
@@ -81,7 +91,7 @@ struct SessionChatView: View {
         VStack(spacing: 0) {
             headerBar
 
-            if isLoading {
+            if isLoading || (!canRenderMessageList && !displayedMessages.isEmpty) {
                 Spacer()
                 Text(L10n.shared["chat_loading"])
                     .font(.system(size: fontSize, design: .monospaced))
@@ -102,17 +112,20 @@ struct SessionChatView: View {
         .onAppear {
             hasCompletedInitialScroll = false
             hasRevealedInitialContent = false
+            canRenderMessageList = false
             isPinnedToBottom = true
             newMessageCount = 0
             shouldAutoScrollOnNextLayout = true
             pendingPinnedScroll = false
             isPerformingProgrammaticScroll = false
             scheduleInitialContentRevealFallback()
+            scheduleMessageListGate()
             loadMessages()
         }
         .onDisappear {
             scrollToBottomTask?.cancel()
             initialContentRevealTask?.cancel()
+            messageListGateTask?.cancel()
             inlineCompletionAutoDismissTask?.cancel()
             isPerformingProgrammaticScroll = false
             stopWatchingTranscript()
@@ -560,6 +573,15 @@ struct SessionChatView: View {
             try? await Task.sleep(for: .milliseconds(800))
             guard !Task.isCancelled else { return }
             revealInitialContent()
+        }
+    }
+
+    private func scheduleMessageListGate() {
+        messageListGateTask?.cancel()
+        messageListGateTask = Task { @MainActor in
+            try? await Task.sleep(for: Self.openAnimationGuardDelay)
+            guard !Task.isCancelled else { return }
+            canRenderMessageList = true
         }
     }
 
