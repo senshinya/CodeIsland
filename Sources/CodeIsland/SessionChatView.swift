@@ -1498,6 +1498,11 @@ final class SessionChatScrollController: ObservableObject {
     private var floatingButton: NSButton?
     private var springAnimator: ScrollSpringAnimator?
     private var liveScrollObserverToken: NSObjectProtocol?
+    /// Bumped every time the pill is shown or hidden. The fade-out's completion
+    /// handler compares this against its captured token and bails if a newer
+    /// show/hide landed in the meantime — keeps the pill from flashing off
+    /// right after being re-shown.
+    private var hideAnimationToken = 0
     var onNewMessagesTapped: (() -> Void)?
 
     var documentHeight: CGFloat? {
@@ -1604,11 +1609,28 @@ final class SessionChatScrollController: ObservableObject {
             width: btnSize.width,
             height: btnSize.height
         )
+        hideAnimationToken += 1
+        btn.alphaValue = 1
         btn.isHidden = false
     }
 
+    /// Fade-out matches the chat content's 0.10s easeIn fade so pill + transcript
+    /// disappear together when the user taps to jump. `hideAnimationToken` tracks
+    /// cancellation: if the button is re-shown mid-fade, the completion handler
+    /// sees a stale token and skips the final hide to avoid flashing.
     func hideNewMessagesButton() {
-        floatingButton?.isHidden = true
+        guard let btn = floatingButton, !btn.isHidden else { return }
+        hideAnimationToken += 1
+        let token = hideAnimationToken
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.10
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            btn.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            guard let self, token == self.hideAnimationToken else { return }
+            btn.isHidden = true
+            btn.alphaValue = 1
+        })
     }
 
     @objc private func floatingButtonTapped() {
