@@ -19,8 +19,8 @@ public struct ConversationTailDelta: Equatable, Sendable {
     }
 }
 
-/// Watches one or more Claude-style JSONL transcripts and streams incremental
-/// `ConversationTailDelta` events as new lines are appended.
+/// Watches one or more JSONL transcripts (Claude or Codex schema) and streams
+/// incremental `ConversationTailDelta` events as new lines are appended.
 ///
 /// The tailer attaches at end-of-file so it complements — rather than duplicates —
 /// whatever initial backfill the caller already performed via filesystem scanning.
