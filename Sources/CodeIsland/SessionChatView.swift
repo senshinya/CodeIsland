@@ -602,7 +602,14 @@ struct SessionChatView: View {
     private func scheduleInitialContentRevealFallback() {
         initialContentRevealTask?.cancel()
         initialContentRevealTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(800))
+            // Hard-deadline safety net only — the scroll-based path at line ~567
+            // is the normal reveal trigger and fires once settleInitialBottomLock +
+            // confirmBottomPosition finish pumping performScrollToBottom. Those
+            // loops can run up to ~550ms past the 600ms messageList gate for
+            // sessions where MarkdownUI's eager block construction and height
+            // stabilization take a while; if we reveal before that, the 0.12s
+            // opacity fade runs concurrent with scroll-offset commits and stutters.
+            try? await Task.sleep(for: .milliseconds(2000))
             guard !Task.isCancelled else { return }
             revealInitialContent()
         }
