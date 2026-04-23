@@ -656,10 +656,10 @@ struct SessionChatView: View {
 
         jumpFadeTask?.cancel()
         jumpFadeTask = Task { @MainActor in
-            withAnimation(.easeIn(duration: 0.10)) {
+            withAnimation(.easeIn(duration: 0.05)) {
                 contentOpacity = 0
             }
-            try? await Task.sleep(for: .milliseconds(110))
+            try? await Task.sleep(for: .milliseconds(60))
             guard !Task.isCancelled else {
                 withAnimation(.easeOut(duration: 0.12)) { contentOpacity = 1 }
                 return
@@ -1614,7 +1614,7 @@ final class SessionChatScrollController: ObservableObject {
         btn.isHidden = false
     }
 
-    /// Fade-out matches the chat content's 0.10s easeIn fade so pill + transcript
+    /// Fade-out matches the chat content's 0.05s easeIn fade so pill + transcript
     /// disappear together when the user taps to jump. `hideAnimationToken` tracks
     /// cancellation: if the button is re-shown mid-fade, the completion handler
     /// sees a stale token and skips the final hide to avoid flashing.
@@ -1623,7 +1623,7 @@ final class SessionChatScrollController: ObservableObject {
         hideAnimationToken += 1
         let token = hideAnimationToken
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.10
+            ctx.duration = 0.05
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
             btn.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
