@@ -257,9 +257,9 @@ public final class JSONLTailer: @unchecked Sendable {
         // parent's full buffer rather than the slice's view.
         let lineData = Data(line)
 
-        // Fast path: realistic Claude transcripts are ~75% tool_use / tool_result /
-        // meta rows we don't care about. Skipping the JSON parse for those saves a
-        // measurable chunk of CPU per byte during streaming bursts.
+        // Fast path: realistic Claude/Codex transcripts are ~75% tool_use / tool_result /
+        // response_item / meta rows we don't care about. Skipping the JSON parse for those
+        // saves a measurable chunk of CPU per byte during streaming bursts.
         let kind = quickTypeProbe(lineBytes: lineData)
         guard kind != .irrelevant else { return }
 
@@ -273,37 +273,53 @@ public final class JSONLTailer: @unchecked Sendable {
 
         switch type {
         case "user":
+            // Claude schema: {"type":"user","message":{"content":...}}
             if let text = extractText(from: message["content"]) {
                 delta.lastUserPrompt = text
             }
         case "assistant":
+            // Claude schema: {"type":"assistant","message":{"content":...}}
             if let text = extractText(from: message["content"]) {
                 delta.lastAssistantMessage = text
+            }
+        case "event_msg":
+            // Codex schema: {"type":"event_msg","payload":{"type":"user_message"|"agent_message","message":"..."}}
+            guard let payload = json["payload"] as? [String: Any],
+                  let payloadType = payload["type"] as? String,
+                  let raw = payload["message"] as? String else { break }
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { break }
+            switch payloadType {
+            case "user_message":  delta.lastUserPrompt = trimmed
+            case "agent_message": delta.lastAssistantMessage = trimmed
+            default:              break
             }
         default:
             break
         }
     }
 
-    /// Types we care about for the panel: `"user"` and `"assistant"`. Anything
-    /// else — including unknown types and absent-type lines — can be skipped
-    /// without bothering the JSON parser.
+    /// Types we care about for the panel: Claude's `"user"`/`"assistant"`, and
+    /// Codex's `"event_msg"` (which later narrows to user_message/agent_message
+    /// inside its payload). Anything else — tool rows, meta, response_item — can
+    /// be skipped without bothering the JSON parser.
     enum QuickTypeKind: Equatable {
         case user
         case assistant
+        case codexEventMsg
         case irrelevant
     }
 
     /// Byte-scan the line for the first `"type":"` occurrence and peek at the
     /// character that follows the opening quote. A single pass that gives up
-    /// as soon as it sees something that isn't `u`, `a`, or an escape. Returns
-    /// `.irrelevant` when neither `"user"` nor `"assistant"` appears as a
-    /// `type` value, letting the caller skip the JSON parser entirely.
+    /// as soon as it sees something that isn't `u`, `a`, `e`, or an escape. Returns
+    /// `.irrelevant` when none of the interesting type values appears, letting the
+    /// caller skip the JSON parser entirely.
     ///
     /// Limitations: does not tolerate whitespace between the colon and the
-    /// opening quote (e.g. `"type" : "user"`). Claude's JSONL writer never
-    /// emits that shape, so lines which do fall through to the parser via the
-    /// `.irrelevant` path get a correct — if slightly more expensive — answer
+    /// opening quote (e.g. `"type" : "user"`). Claude and Codex JSONL writers
+    /// never emit that shape, so lines which do fall through to the parser via
+    /// the `.irrelevant` path get a correct — if slightly more expensive — answer
     /// by returning nothing, which is safe (we just miss those updates).
     static func quickTypeProbe(lineBytes: Data) -> QuickTypeKind {
         guard lineBytes.count >= typeMarker.count + 2 else { return .irrelevant }
@@ -335,6 +351,10 @@ public final class JSONLTailer: @unchecked Sendable {
                             if hasExactValue(ptr, at: valueStart, total: total, expect: assistantBytes) {
                                 return .assistant
                             }
+                        case 0x65:  // 'e' — Codex event_msg
+                            if hasExactValue(ptr, at: valueStart, total: total, expect: eventMsgBytes) {
+                                return .codexEventMsg
+                            }
                         default:
                             break
                         }
@@ -355,6 +375,7 @@ public final class JSONLTailer: @unchecked Sendable {
     private static let typeMarker: [UInt8] = Array(#""type":""#.utf8)
     private static let userBytes: [UInt8] = Array(#"user""#.utf8)
     private static let assistantBytes: [UInt8] = Array(#"assistant""#.utf8)
+    private static let eventMsgBytes: [UInt8] = Array(#"event_msg""#.utf8)
 
     private static func hasExactValue(
         _ ptr: UnsafePointer<UInt8>,

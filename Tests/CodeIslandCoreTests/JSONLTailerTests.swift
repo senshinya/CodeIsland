@@ -68,6 +68,64 @@ final class JSONLTailerTests: XCTestCase {
         XCTAssertTrue(result.delta.isEmpty)
     }
 
+    // MARK: - Codex event_msg
+
+    func testScanLinesExtractsCodexUserMessage() {
+        let line = #"{"timestamp":"2026-04-10T11:25:35.635Z","type":"event_msg","payload":{"type":"user_message","message":"align this panel"}}"#
+        let result = JSONLTailer.scanLines(Data((line + "\n").utf8))
+        XCTAssertEqual(result.delta.lastUserPrompt, "align this panel")
+        XCTAssertNil(result.delta.lastAssistantMessage)
+    }
+
+    func testScanLinesExtractsCodexAgentMessage() {
+        let line = #"{"timestamp":"2026-04-10T11:25:37.000Z","type":"event_msg","payload":{"type":"agent_message","message":"I will update the styles."}}"#
+        let result = JSONLTailer.scanLines(Data((line + "\n").utf8))
+        XCTAssertEqual(result.delta.lastAssistantMessage, "I will update the styles.")
+        XCTAssertNil(result.delta.lastUserPrompt)
+    }
+
+    func testScanLinesCodexLatestLineWinsForEachRole() {
+        let lines = [
+            #"{"type":"event_msg","payload":{"type":"user_message","message":"first ask"}}"#,
+            #"{"type":"event_msg","payload":{"type":"agent_message","message":"first reply"}}"#,
+            #"{"type":"event_msg","payload":{"type":"user_message","message":"second ask"}}"#,
+            #"{"type":"event_msg","payload":{"type":"agent_message","message":"second reply"}}"#,
+        ]
+        let bytes = Data((lines.joined(separator: "\n") + "\n").utf8)
+        let result = JSONLTailer.scanLines(bytes)
+        XCTAssertEqual(result.delta.lastUserPrompt, "second ask")
+        XCTAssertEqual(result.delta.lastAssistantMessage, "second reply")
+    }
+
+    func testScanLinesCodexIgnoresNonConversationEventMsg() {
+        // task_complete, turn_aborted, response_item etc. carry no preview content.
+        let lines = [
+            #"{"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1"}}"#,
+            #"{"type":"event_msg","payload":{"type":"turn_aborted","reason":"interrupted"}}"#,
+            #"{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{}"}}"#,
+        ]
+        let bytes = Data((lines.joined(separator: "\n") + "\n").utf8)
+        let result = JSONLTailer.scanLines(bytes)
+        XCTAssertTrue(result.delta.isEmpty)
+    }
+
+    func testScanLinesCodexIgnoresEmptyMessage() {
+        let line = #"{"type":"event_msg","payload":{"type":"user_message","message":"   "}}"#
+        let result = JSONLTailer.scanLines(Data((line + "\n").utf8))
+        XCTAssertTrue(result.delta.isEmpty)
+    }
+
+    func testScanLinesMixedClaudeAndCodexRowsPickLatestPerRole() {
+        let lines = [
+            #"{"type":"user","message":{"content":"claude question"}}"#,
+            #"{"type":"event_msg","payload":{"type":"agent_message","message":"codex reply"}}"#,
+        ]
+        let bytes = Data((lines.joined(separator: "\n") + "\n").utf8)
+        let result = JSONLTailer.scanLines(bytes)
+        XCTAssertEqual(result.delta.lastUserPrompt, "claude question")
+        XCTAssertEqual(result.delta.lastAssistantMessage, "codex reply")
+    }
+
     // MARK: - extractText
 
     func testExtractTextFromPlainString() {
