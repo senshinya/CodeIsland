@@ -139,13 +139,17 @@ struct NotchPanelView: View {
                         .padding(.horizontal, 12)
 
                     switch appState.surface {
-                    case .approvalCard:
+                    case .approvalCard(let sid):
                         if let pending = appState.pendingPermission {
+                            let session = appState.sessions[sid]
                             ApprovalBar(
                                 tool: pending.event.toolName ?? "Unknown",
                                 toolInput: pending.event.toolInput,
                                 queuePosition: 1,
                                 queueTotal: appState.permissionQueue.count,
+                                session: session,
+                                sessionId: sid,
+                                appState: appState,
                                 onAllow: { appState.approvePermission(always: false) },
                                 onAlwaysAllow: { appState.approvePermission(always: true) },
                                 onDeny: { appState.denyPermission() },
@@ -890,11 +894,19 @@ struct ApprovalBar: View {
     let toolInput: [String: Any]?
     let queuePosition: Int
     let queueTotal: Int
+    let session: SessionSnapshot?
+    let sessionId: String
+    let appState: AppState
     let onAllow: () -> Void
     let onAlwaysAllow: () -> Void
     let onDeny: () -> Void
     let onBypass: () -> Void
     let onDismiss: () -> Void
+
+    // Jump validation state for click-to-jump functionality.
+    @State private var failureShakeOffset: CGFloat = 0
+    @State private var jumpValidationTask: Task<Void, Never>?
+    @AppStorage(SettingsKey.autoCollapseAfterSessionJump) private var autoCollapseAfterSessionJump = SettingsDefaults.autoCollapseAfterSessionJump
 
     private var fileName: String? {
         guard let fp = toolInput?["file_path"] as? String else { return nil }
@@ -941,6 +953,8 @@ struct ApprovalBar: View {
                 Spacer()
             }
             .padding(.horizontal, 14)
+            .contentShape(Rectangle())
+            .onTapGesture { handleCardClick() }
 
             // Tool-specific detail view
             if toolInput != nil {
@@ -949,6 +963,8 @@ struct ApprovalBar: View {
                     .padding(.vertical, 6)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.white.opacity(0.04))
+                    .contentShape(Rectangle())
+                    .onTapGesture { handleCardClick() }
             }
 
             // Approval buttons
@@ -962,6 +978,85 @@ struct ApprovalBar: View {
             .padding(.horizontal, 14)
         }
         .padding(.vertical, 10)
+        .offset(x: failureShakeOffset)
+        .onDisappear {
+            jumpValidationTask?.cancel()
+            jumpValidationTask = nil
+        }
+    }
+
+    // MARK: - Click-to-jump handling
+
+    /// Handle click on approval card to jump to terminal. Mirrors SessionCard.handleSessionClick():
+    /// - nil session: play error sound + shake animation
+    /// - valid session: activate terminal + optionally auto-collapse on success / shake on failure
+    private func handleCardClick() {
+        guard let session = session else {
+            Task { @MainActor in
+                SoundManager.shared.preview("8bit_error")
+                await runJumpFailureShakeAnimation()
+            }
+            return
+        }
+
+        TerminalActivator.activate(session: session, sessionId: sessionId)
+
+        guard autoCollapseAfterSessionJump else { return }
+
+        // Validate jump: retry 3x with increasing delays (120ms, 320ms, 640ms).
+        // Collapse on success; play error sound + shake on failure.
+        jumpValidationTask?.cancel()
+        jumpValidationTask = Task {
+            let delays: [UInt64] = [120_000_000, 320_000_000, 640_000_000]
+            let outcome = await evaluateJumpValidation(
+                delays: delays,
+                checkSucceeded: { await checkJumpSucceeded(session: session) }
+            )
+
+            switch outcome {
+            case .success:
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    switch appState.surface {
+                    case .approvalCard:
+                        withAnimation(NotchAnimation.close) {
+                            appState.surface = .collapsed
+                        }
+                    default:
+                        break
+                    }
+                }
+            case .failed:
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    SoundManager.shared.preview("8bit_error")
+                }
+                guard !Task.isCancelled else { return }
+                await runJumpFailureShakeAnimation()
+            case .cancelled:
+                return
+            }
+        }
+    }
+
+    private func checkJumpSucceeded(session: SessionSnapshot) async -> Bool {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let succeeded = TerminalVisibilityDetector.isSessionTabVisible(session)
+                    || TerminalVisibilityDetector.isTerminalFrontmostForSession(session)
+                continuation.resume(returning: succeeded)
+            }
+        }
+    }
+
+    @MainActor
+    private func runJumpFailureShakeAnimation() async {
+        for offset in jumpFailureShakeSequence() {
+            withAnimation(.easeInOut(duration: 0.035)) {
+                failureShakeOffset = CGFloat(offset)
+            }
+            try? await Task.sleep(nanoseconds: 35_000_000)
+        }
     }
 
     @ViewBuilder

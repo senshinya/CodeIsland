@@ -6,7 +6,7 @@ public enum SessionTitleSource: String, Sendable, Codable {
     case claudeAiTitle
 }
 
-public struct SessionSnapshot {
+public struct SessionSnapshot: Sendable {
     public static let supportedSources: Set<String> = [
         "claude",
         "codex",

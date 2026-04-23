@@ -534,8 +534,9 @@ struct ConfigInstaller {
         }
 
         root[cli.configKey] = hooks
-        // Copilot CLI requires a top-level "version" field
-        if cli.format == .copilot {
+        // Copilot CLI requires a top-level "version" field. Only seed it when the user
+        // hasn't set one, so a user-bumped schema version survives if Copilot ever ships v2+.
+        if cli.format == .copilot, root["version"] == nil {
             root["version"] = 1
         }
         return writeJSONPreservingUntouched(root, at: cli.fullPath, fm: fm)

@@ -16,8 +16,10 @@ enum NotchAnimation {
 private struct BlurFadeModifier: ViewModifier {
     let active: Bool
     func body(content: Content) -> some View {
+        // No compositingGroup here: macOS 26 renders compositingGroup + blur
+        // (even with radius 0 in the identity state) transparent until a forced
+        // re-composition, which made the approval card invisible except on hover.
         content
-            .compositingGroup()
             .blur(radius: active ? 5 : 0)
             .opacity(active ? 0 : 1)
     }

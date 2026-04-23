@@ -166,6 +166,12 @@ struct TerminalActivator {
             return
         }
 
+        // --- Warp (SQLite pane precision jump + Cmd+N tab switch) ---
+        if lower.contains("warp") || effectiveBundleId == "dev.warp.Warp-Stable" {
+            activateWarp(cwd: session.cwd)
+            return
+        }
+
         if let bundleId = effectiveBundleId,
            let cwd = session.cwd,
            !cwd.isEmpty {
@@ -1021,6 +1027,70 @@ struct TerminalActivator {
                 args += ["--workspace", wid]
             }
             _ = runProcess(cmuxBin, args: args)
+        }
+    }
+
+    // MARK: - Warp (SQLite pane lookup + optional tab keystroke)
+
+    /// Bring Warp forward, and when the SQLite state shows that the target cwd lives
+    /// in a non-active tab, send the default "go to tab N" keystroke (Cmd+digit).
+    ///
+    /// The keystroke path requires Accessibility permission; without it CGEvent.post
+    /// becomes a silent no-op and we gracefully degrade to plain app activation —
+    /// which is what the previous implementation did unconditionally, so this is a
+    /// strict improvement rather than a regression risk.
+    private static func activateWarp(cwd: String?) {
+        let warpBundleId = "dev.warp.Warp-Stable"
+
+        guard let warpApp = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == warpBundleId
+        }) else {
+            bringToFront("Warp")
+            return
+        }
+        if warpApp.isHidden { warpApp.unhide() }
+        warpApp.activate()
+
+        guard let cwd, !cwd.isEmpty else { return }
+
+        // SQLite I/O is fast (sub-ms on a warm cache) but run it off the main thread
+        // anyway; we've already handed the user a visible activation.
+        DispatchQueue.global(qos: .userInitiated).async {
+            let resolver = WarpPaneResolver()
+            let matches: [WarpPaneMatch]
+            do {
+                matches = try resolver.resolve(cwd: cwd)
+            } catch {
+                return
+            }
+            guard let best = matches.first else { return }
+            if best.isActiveTab { return }
+
+            let targetPosition = best.tabIndexInWindow + 1
+            guard (1...9).contains(targetPosition) else { return }
+
+            DispatchQueue.main.async {
+                sendWarpGoToTab(position: targetPosition)
+            }
+        }
+    }
+
+    /// Synthesize Warp's default "jump to tab N" shortcut (Cmd+<digit>, 1-9) for the
+    /// frontmost window. 10+ would require an extra keycode table; we bail for now.
+    private static func sendWarpGoToTab(position: Int) {
+        guard (1...9).contains(position) else { return }
+        // ANSI virtual keycodes for digits 1..9 (QWERTY layout).
+        let digitKeyCodes: [CGKeyCode] = [18, 19, 20, 21, 23, 22, 26, 28, 25]
+        let keyCode = digitKeyCodes[position - 1]
+        guard let source = CGEventSource(stateID: .combinedSessionState) else { return }
+
+        if let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true) {
+            down.flags = .maskCommand
+            down.post(tap: .cghidEventTap)
+        }
+        if let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) {
+            up.flags = .maskCommand
+            up.post(tap: .cghidEventTap)
         }
     }
 }

@@ -1,6 +1,6 @@
 import Foundation
 
-public enum AgentStatus {
+public enum AgentStatus: Sendable {
     case idle
     case processing
     case running
@@ -144,7 +144,7 @@ public struct HookEvent {
     }
 }
 
-public struct SubagentState {
+public struct SubagentState: Sendable {
     public let agentId: String
     public let agentType: String
     public var status: AgentStatus = .running
@@ -159,7 +159,7 @@ public struct SubagentState {
     }
 }
 
-public struct ToolHistoryEntry: Identifiable {
+public struct ToolHistoryEntry: Identifiable, Sendable {
     public let id = UUID()
     public let tool: String
     public let description: String?
@@ -176,7 +176,7 @@ public struct ToolHistoryEntry: Identifiable {
     }
 }
 
-public struct ChatMessage: Identifiable {
+public struct ChatMessage: Identifiable, Sendable {
     public let id = UUID()
     public let isUser: Bool
     public let text: String
