@@ -46,11 +46,12 @@ struct SessionChatView: View {
     /// after the NotchAnimation.open spring settles. See `openAnimationGuardDelay`.
     @State private var canRenderMessageList = false
     @State private var isPinnedToBottom = true
-    /// Set while a jump-to-bottom is transitioning: fade-out → instant scroll →
-    /// settle → fade-in. Used to hide the content during the scroll jump so the
-    /// user doesn't see the scroll re-positioning itself (which used to be a long
-    /// spring animation that stuttered with MarkdownUI re-layouts).
-    @State private var isPreparingJumpFade = false
+    /// Drives the message-list opacity directly. Bool→Double derived opacity
+    /// didn't reliably interpolate under withAnimation (observed as instant
+    /// disappear instead of fade), so expose a Double @State and let withAnimation
+    /// animate it natively. `hasRevealedInitialContent` is still kept separately
+    /// for non-visual logic that depends on "first reveal complete".
+    @State private var contentOpacity: Double = 0
     @State private var jumpFadeTask: Task<Void, Never>?
     /// When the user has scrolled away from the bottom, the visibleMessages window
     /// freezes its head at this id so new-message appends grow the window downward
@@ -136,6 +137,7 @@ struct SessionChatView: View {
         .onAppear {
             hasCompletedInitialScroll = false
             hasRevealedInitialContent = false
+            contentOpacity = 0
             canRenderMessageList = false
             isPinnedToBottom = true
             visibleWindowAnchorID = nil
@@ -377,11 +379,11 @@ struct SessionChatView: View {
             .coordinateSpace(name: "chat_scroll")
             .textSelection(.disabled)
             .frame(maxHeight: chatMaxHeight)
-            // Opacity is driven by explicit `withAnimation` calls (revealInitialContent
-            // for the first reveal, jumpToBottomWithFade for pill/send jumps), so no
-            // `.animation(_:value:)` modifier here — both inputs need different curves
-            // and one value-scoped modifier can't serve both.
-            .opacity(hasRevealedInitialContent && !isPreparingJumpFade ? 1 : 0)
+            // Opacity driven by a Double @State so `withAnimation` interpolates it
+            // natively. revealInitialContent raises it to 1 on first reveal; the
+            // jump helper fades it to 0 before the instant scroll and back to 1
+            // after settle. Bool-derived opacity didn't animate reliably here.
+            .opacity(contentOpacity)
             .onAppear {
                 scrollController.onNewMessagesTapped = {
                     // Fade-out → instant jump → settle → fade-in. Replaces the older
@@ -632,6 +634,7 @@ struct SessionChatView: View {
         initialContentRevealTask = nil
         withAnimation(.easeIn(duration: 0.12)) {
             hasRevealedInitialContent = true
+            contentOpacity = 1
         }
     }
 
@@ -654,11 +657,11 @@ struct SessionChatView: View {
         jumpFadeTask?.cancel()
         jumpFadeTask = Task { @MainActor in
             withAnimation(.easeIn(duration: 0.10)) {
-                isPreparingJumpFade = true
+                contentOpacity = 0
             }
             try? await Task.sleep(for: .milliseconds(110))
             guard !Task.isCancelled else {
-                withAnimation(.easeOut(duration: 0.12)) { isPreparingJumpFade = false }
+                withAnimation(.easeOut(duration: 0.12)) { contentOpacity = 1 }
                 return
             }
 
@@ -670,7 +673,7 @@ struct SessionChatView: View {
             // may re-measure now that they're near the viewport.
             await settleInitialBottomLock(with: proxy)
             guard !Task.isCancelled else {
-                withAnimation(.easeOut(duration: 0.12)) { isPreparingJumpFade = false }
+                withAnimation(.easeOut(duration: 0.12)) { contentOpacity = 1 }
                 return
             }
 
@@ -679,7 +682,7 @@ struct SessionChatView: View {
                 delays: InitialScrollTiming.finalVerificationDelays
             )
             guard !Task.isCancelled else {
-                withAnimation(.easeOut(duration: 0.12)) { isPreparingJumpFade = false }
+                withAnimation(.easeOut(duration: 0.12)) { contentOpacity = 1 }
                 return
             }
             isPinnedToBottom = reachedBottom
@@ -688,7 +691,7 @@ struct SessionChatView: View {
             }
 
             withAnimation(.easeOut(duration: 0.18)) {
-                isPreparingJumpFade = false
+                contentOpacity = 1
             }
         }
     }
