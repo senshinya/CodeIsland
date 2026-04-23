@@ -15,12 +15,7 @@ import CodeIslandCore
 //   busy        — heavy workload with subagents
 //   claude      — Claude CLI single session
 //   codex       — Codex CLI single session
-//   gemini      — Gemini CLI single session
-//   cursor      — Cursor CLI single session (YOLO mode)
-//   qoder       — Qoder CLI single session
-//   factory     — Factory/Droid CLI single session
-//   codebuddy   — CodeBuddy CLI single session
-//   allcli      — All CLIs running simultaneously
+//   allcli      — All supported CLIs running simultaneously
 
 enum PreviewScenario: String, CaseIterable {
     case working
@@ -32,12 +27,6 @@ enum PreviewScenario: String, CaseIterable {
     // CLI-specific scenarios
     case claude
     case codex
-    case gemini
-    case cursor
-    case qoder
-    case factory
-    case codebuddy
-    case opencode
     case allcli
     // Special states
     case idle
@@ -72,12 +61,6 @@ enum DebugHarness {
             applyBusy(to: appState)
         case .claude: applyClaude(to: appState)
         case .codex: applyCodex(to: appState)
-        case .gemini: applyGemini(to: appState)
-        case .cursor: applyCursor(to: appState)
-        case .qoder: applyQoder(to: appState)
-        case .factory: applyFactory(to: appState)
-        case .codebuddy: applyCodeBuddy(to: appState)
-        case .opencode: applyOpenCode(to: appState)
         case .allcli: applyAllCLI(to: appState)
         case .idle: applyIdle(to: appState)
         case .stress: applyStress(to: appState)
@@ -191,11 +174,12 @@ enum DebugHarness {
         s2.addRecentMessage(ChatMessage(isUser: true, text: "Optimize the query planner"))
         s2.addRecentMessage(ChatMessage(isUser: false, text: "Refactored the query planner."))
 
-        // Session 3: Cursor processing
+        // Session 3: Claude processing
         var s3 = SessionSnapshot()
         s3.status = .processing
         s3.cwd = "/Users/dev/mobile"
-        s3.source = "cursor"
+        s3.model = "claude-sonnet-4-20250514"
+        s3.source = "claude"
         s3.lastUserPrompt = "Fix the scroll jank"
         s3.addRecentMessage(ChatMessage(isUser: true, text: "Fix the scroll jank"))
 
@@ -228,12 +212,12 @@ enum DebugHarness {
         s1.recordTool("Edit", description: "src/index.ts", success: true, agentType: "general-purpose", maxHistory: 20)
         s1.termApp = "Ghostty"
 
-        // Gemini session
+        // Another Claude session
         var s2 = SessionSnapshot()
         s2.status = .processing
         s2.cwd = "/Users/dev/data-pipeline"
-        s2.model = "gemini-2.5-pro"
-        s2.source = "gemini"
+        s2.model = "claude-sonnet-4-20250514"
+        s2.source = "claude"
         s2.lastUserPrompt = "Profile the ETL bottleneck"
         s2.addRecentMessage(ChatMessage(isUser: true, text: "Profile the ETL bottleneck"))
 
@@ -290,92 +274,6 @@ enum DebugHarness {
         state.activeSessionId = "preview-codex"
     }
 
-    private static func applyGemini(to state: AppState) {
-        var s = SessionSnapshot()
-        s.status = .processing
-        s.cwd = "/tmp/demo-gemini"
-        s.model = "gemini-2.5-pro"
-        s.source = "gemini"
-        s.lastUserPrompt = "Analyze the performance bottleneck"
-        s.addRecentMessage(ChatMessage(isUser: true, text: "Analyze the performance bottleneck"))
-        s.addRecentMessage(ChatMessage(isUser: false, text: "Looking at the profiling data..."))
-        s.termApp = "iTerm.app"
-        state.sessions["preview-gemini"] = s
-        state.activeSessionId = "preview-gemini"
-    }
-
-    private static func applyCursor(to state: AppState) {
-        var s = SessionSnapshot()
-        s.status = .running
-        s.cwd = "/tmp/demo-cursor"
-        s.source = "cursor"
-        s.isYoloMode = true
-        s.currentTool = "Edit"
-        s.toolDescription = "src/App.tsx"
-        s.lastUserPrompt = "Add dark mode toggle"
-        s.addRecentMessage(ChatMessage(isUser: true, text: "Add dark mode toggle"))
-        s.recordTool("Read", description: "src/App.tsx", success: true, agentType: nil, maxHistory: 20)
-        s.recordTool("Edit", description: "src/theme.ts", success: true, agentType: nil, maxHistory: 20)
-        state.sessions["preview-cursor"] = s
-        state.activeSessionId = "preview-cursor"
-    }
-
-    private static func applyQoder(to state: AppState) {
-        var s = SessionSnapshot()
-        s.status = .idle
-        s.cwd = "/tmp/demo-qoder"
-        s.model = "claude-sonnet-4-20250514"
-        s.source = "qoder"
-        s.lastUserPrompt = "Generate API documentation"
-        s.lastAssistantMessage = "Documentation generated for all 12 endpoints."
-        s.addRecentMessage(ChatMessage(isUser: true, text: "Generate API documentation"))
-        s.addRecentMessage(ChatMessage(isUser: false, text: "Documentation generated for all 12 endpoints."))
-        state.sessions["preview-qoder"] = s
-        state.activeSessionId = "preview-qoder"
-    }
-
-    private static func applyFactory(to state: AppState) {
-        var s = SessionSnapshot()
-        s.status = .running
-        s.cwd = "/tmp/demo-factory"
-        s.model = "claude-sonnet-4-20250514"
-        s.source = "droid"
-        s.currentTool = "Write"
-        s.toolDescription = "tests/integration.py"
-        s.lastUserPrompt = "Write integration tests"
-        s.addRecentMessage(ChatMessage(isUser: true, text: "Write integration tests"))
-        s.recordTool("Read", description: "src/api.py", success: true, agentType: nil, maxHistory: 20)
-        state.sessions["preview-factory"] = s
-        state.activeSessionId = "preview-factory"
-    }
-
-    private static func applyCodeBuddy(to state: AppState) {
-        var s = SessionSnapshot()
-        s.status = .processing
-        s.cwd = "/tmp/demo-codebuddy"
-        s.model = "claude-sonnet-4-20250514"
-        s.source = "codebuddy"
-        s.lastUserPrompt = "Optimize database queries"
-        s.addRecentMessage(ChatMessage(isUser: true, text: "Optimize database queries"))
-        state.sessions["preview-codebuddy"] = s
-        state.activeSessionId = "preview-codebuddy"
-    }
-
-    private static func applyOpenCode(to state: AppState) {
-        var s = SessionSnapshot()
-        s.status = .running
-        s.cwd = "/tmp/demo-opencode"
-        s.model = "gpt-4.1"
-        s.source = "opencode"
-        s.currentTool = "Bash"
-        s.toolDescription = "npm test"
-        s.lastUserPrompt = "Run the test suite"
-        s.addRecentMessage(ChatMessage(isUser: true, text: "Run the test suite"))
-        s.termApp = "Ghostty"
-        state.sessions["preview-opencode"] = s
-        state.activeSessionId = "preview-opencode"
-    }
-
     private static func applyAllCLI(to state: AppState) {
         var s1 = SessionSnapshot()
         s1.status = .running
@@ -400,71 +298,20 @@ enum DebugHarness {
         s2.addRecentMessage(ChatMessage(isUser: true, text: "Build the Rust project"))
 
         var s3 = SessionSnapshot()
-        s3.status = .processing
-        s3.cwd = "/tmp/demo-gemini"
-        s3.model = "gemini-2.5-pro"
-        s3.source = "gemini"
-        s3.lastUserPrompt = "Review the PR"
-        s3.addRecentMessage(ChatMessage(isUser: true, text: "Review the PR"))
-
-        var s4 = SessionSnapshot()
-        s4.status = .processing
-        s4.cwd = "/tmp/demo-cursor"
-        s4.source = "cursor"
-        s4.isYoloMode = true
-        s4.lastUserPrompt = "Refactor components"
-        s4.addRecentMessage(ChatMessage(isUser: true, text: "Refactor components"))
-
-        var s5 = SessionSnapshot()
-        s5.status = .waitingApproval
-        s5.cwd = "/tmp/demo-qoder"
-        s5.model = "claude-sonnet-4-20250514"
-        s5.source = "qoder"
-        s5.currentTool = "Bash"
-        s5.toolDescription = "rm -rf node_modules"
-        s5.lastUserPrompt = "Clean up dependencies"
-        s5.addRecentMessage(ChatMessage(isUser: true, text: "Clean up dependencies"))
-
-        var s6 = SessionSnapshot()
-        s6.status = .idle
-        s6.cwd = "/tmp/demo-factory"
-        s6.model = "claude-sonnet-4-20250514"
-        s6.source = "droid"
-        s6.lastUserPrompt = "Done with migration"
-        s6.lastAssistantMessage = "Migration complete."
-        s6.addRecentMessage(ChatMessage(isUser: true, text: "Done with migration"))
-        s6.addRecentMessage(ChatMessage(isUser: false, text: "Migration complete."))
-
-        var s7 = SessionSnapshot()
-        s7.status = .idle
-        s7.cwd = "/tmp/demo-codebuddy"
-        s7.model = "claude-sonnet-4-20250514"
-        s7.source = "codebuddy"
-        s7.interrupted = true
-        s7.lastUserPrompt = "Fix the login flow"
-        s7.addRecentMessage(ChatMessage(isUser: true, text: "Fix the login flow"))
-
-        var s8 = SessionSnapshot()
-        s8.status = .running
-        s8.cwd = "/tmp/demo-opencode"
-        s8.model = "gpt-4.1"
-        s8.source = "opencode"
-        s8.currentTool = "Bash"
-        s8.toolDescription = "npm test"
-        s8.lastUserPrompt = "Run test suite"
-        s8.addRecentMessage(ChatMessage(isUser: true, text: "Run test suite"))
-        s8.termApp = "Ghostty"
+        s3.status = .waitingApproval
+        s3.cwd = "/tmp/demo-claude-2"
+        s3.model = "claude-sonnet-4-20250514"
+        s3.source = "claude"
+        s3.currentTool = "Bash"
+        s3.toolDescription = "rm -rf node_modules"
+        s3.lastUserPrompt = "Clean up dependencies"
+        s3.addRecentMessage(ChatMessage(isUser: true, text: "Clean up dependencies"))
 
         state.sessions["preview-allcli-1"] = s1
         state.sessions["preview-allcli-2"] = s2
         state.sessions["preview-allcli-3"] = s3
-        state.sessions["preview-allcli-4"] = s4
-        state.sessions["preview-allcli-5"] = s5
-        state.sessions["preview-allcli-6"] = s6
-        state.sessions["preview-allcli-7"] = s7
-        state.sessions["preview-allcli-8"] = s8
         state.activeSessionId = "preview-allcli-1"
-        state.surface = .approvalCard(sessionId: "preview-allcli-5")
+        state.surface = .approvalCard(sessionId: "preview-allcli-3")
     }
 
     // MARK: - Idle (no sessions)
@@ -490,7 +337,7 @@ enum DebugHarness {
     // MARK: - Stress Test (30 sessions)
 
     private static func applyStress(to state: AppState) {
-        let sources = ["claude", "codex", "gemini", "cursor", "copilot", "qoder", "droid", "codebuddy", "opencode"]
+        let sources = ["claude", "codex"]
         let statuses: [AgentStatus] = [.running, .processing, .idle, .waitingApproval, .waitingQuestion]
         let tools = ["Edit", "Read", "Bash", "Write", "Grep", "Agent"]
         let projects = ["frontend", "backend", "api", "mobile", "infra", "docs", "cli", "sdk", "web", "core"]

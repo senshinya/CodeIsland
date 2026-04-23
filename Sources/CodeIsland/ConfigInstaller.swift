@@ -21,8 +21,6 @@ enum HookFormat {
     case nested
     /// Cursor style: [{command: "..."}]
     case flat
-    /// GitHub Copilot CLI style: [{type, bash, timeoutSec}] with top-level version
-    case copilot
 }
 
 /// A CLI tool that supports hooks
@@ -490,16 +488,7 @@ struct ConfigInstaller {
 
     @discardableResult
     private static func installExternalHooks(cli: CLIConfig, fm: FileManager) -> Bool {
-        if cli.format == .copilot {
-            // Copilot: check root ~/.copilot exists, create hooks subdir if needed
-            let rootDir = NSHomeDirectory() + "/.copilot"
-            guard fm.fileExists(atPath: rootDir) else { return true }
-            if !fm.fileExists(atPath: cli.dirPath) {
-                try? fm.createDirectory(atPath: cli.dirPath, withIntermediateDirectories: true)
-            }
-        } else {
-            guard fm.fileExists(atPath: cli.dirPath) else { return true } // CLI not installed, skip OK
-        }
+        guard fm.fileExists(atPath: cli.dirPath) else { return true } // CLI not installed, skip OK
 
         var root: [String: Any] = [:]
         if let json = parseJSONFile(at: cli.fullPath, fm: fm) {
@@ -524,21 +513,12 @@ struct ConfigInstaller {
                 entry = ["hooks": [["type": "command", "command": baseCommand, "timeout": timeout] as [String: Any]]]
             case .flat:
                 entry = ["command": baseCommand]
-            case .copilot:
-                // Copilot CLI stdin lacks session_id/hook_event_name — pass event name via flag
-                let copilotCommand = "\(baseCommand) --event \(event)"
-                entry = ["type": "command", "bash": copilotCommand, "timeoutSec": timeout]
             }
             eventEntries.append(entry)
             hooks[event] = eventEntries
         }
 
         root[cli.configKey] = hooks
-        // Copilot CLI requires a top-level "version" field. Only seed it when the user
-        // hasn't set one, so a user-bumped schema version survives if Copilot ever ships v2+.
-        if cli.format == .copilot, root["version"] == nil {
-            root["version"] = 1
-        }
         return writeJSONPreservingUntouched(root, at: cli.fullPath, fm: fm)
     }
 
@@ -669,8 +649,6 @@ struct ConfigInstaller {
         }
         // Flat format: entry.command
         if let cmd = entry["command"] as? String, HookId.isOurs(cmd) { return true }
-        // Copilot format: entry.bash
-        if let cmd = entry["bash"] as? String, HookId.isOurs(cmd) { return true }
         return false
     }
 

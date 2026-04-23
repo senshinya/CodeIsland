@@ -26,26 +26,6 @@ final class HookEventCompatibilityTests: XCTestCase {
         XCTAssertEqual(event.toolDescription, "Run targeted tests")
     }
 
-    func testReduceEventReadsAssistantTextFromNestedPayload() throws {
-        let payload: [String: Any] = [
-            "hook_event_name": "AfterAgentResponse",
-            "session_id": "session-1",
-            "payload": [
-                "message": "Nested assistant reply"
-            ],
-        ]
-
-        let data = try JSONSerialization.data(withJSONObject: payload)
-        let event = try XCTUnwrap(HookEvent(from: data))
-        var sessions: [String: SessionSnapshot] = ["session-1": SessionSnapshot()]
-
-        _ = reduceEvent(sessions: &sessions, event: event, maxHistory: 10)
-
-        XCTAssertEqual(sessions["session-1"]?.lastAssistantMessage, "Nested assistant reply")
-        XCTAssertEqual(sessions["session-1"]?.recentMessages.last?.text, "Nested assistant reply")
-        XCTAssertEqual(sessions["session-1"]?.status, .processing)
-    }
-
     func testReduceEventReadsNotificationTextFromNestedData() throws {
         let payload: [String: Any] = [
             "eventName": "Notification",

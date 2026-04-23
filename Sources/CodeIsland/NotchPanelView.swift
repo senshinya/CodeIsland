@@ -2208,9 +2208,6 @@ private struct SessionCard: View {
                         if session.interrupted {
                             SessionTag("INT", color: Color(red: 1.0, green: 0.6, blue: 0.2))
                         }
-                        if session.isYoloMode == true {
-                            SessionTag("YOLO", color: Color(red: 1.0, green: 0.35, blue: 0.35))
-                        }
                         SessionTag(timeAgo(session.startTime))
                         TerminalBadge(session: session)
                         if hovering {

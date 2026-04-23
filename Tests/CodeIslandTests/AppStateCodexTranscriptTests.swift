@@ -36,48 +36,6 @@ final class AppStateCodexTranscriptTests: XCTestCase {
         XCTAssertNil(AppState.codexLatestTerminalTurnTimestamp(in: transcript))
     }
 
-    func testQoderLatestTerminalTurnTimestampPrefersExplicitStopEvent() throws {
-        let transcript = [
-            #"{"type":"assistant","timestamp":"2026-04-09T03:59:31.309452Z","message":{"role":"assistant","content":[{"text":"hello","type":"text"}]}}"#,
-            #"{"type":"progress","timestamp":"2026-04-09T03:59:31.332585Z","data":{"hookEvent":"Stop","hookName":"Stop","type":"hook_progress"}}"#
-        ].joined(separator: "\n")
-
-        let timestamp = try XCTUnwrap(AppState.qoderLatestTerminalTurnTimestamp(in: transcript))
-
-        XCTAssertEqual(timestamp, try timestampFrom("2026-04-09T03:59:31.332585Z"))
-    }
-
-    func testQoderLatestTerminalTurnTimestampFallsBackToAssistantTextWhenStopMissing() throws {
-        let transcript = [
-            #"{"type":"assistant","timestamp":"2026-04-09T03:59:30.000000Z","message":{"role":"assistant","content":[{"thinking":"let me think","type":"thinking"}]}}"#,
-            #"{"type":"assistant","timestamp":"2026-04-09T03:59:31.309452Z","message":{"role":"assistant","content":[{"text":"hello","type":"text"}]}}"#
-        ].joined(separator: "\n")
-
-        let timestamp = try XCTUnwrap(AppState.qoderLatestTerminalTurnTimestamp(in: transcript))
-
-        XCTAssertEqual(timestamp, try timestampFrom("2026-04-09T03:59:31.309452Z"))
-    }
-
-    func testCodeBuddyLatestTerminalTurnTimestampUsesCompletedAssistantMessage() throws {
-        let transcript = [
-            #"{"timestamp":1775408759547,"type":"function_call","status":"completed","role":"assistant","content":[{"type":"output_text","text":"tool"}]}"#,
-            #"{"timestamp":1775408774216,"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"final"}]}"#
-        ].joined(separator: "\n")
-
-        let timestamp = try XCTUnwrap(AppState.codeBuddyLatestTerminalTurnTimestamp(in: transcript))
-
-        XCTAssertEqual(timestamp, Date(timeIntervalSince1970: 1775408774.216))
-    }
-
-    func testCodeBuddyLatestTerminalTurnTimestampIgnoresNonCompletedAssistantEntries() {
-        let transcript = [
-            #"{"timestamp":1775408759547,"type":"message","role":"assistant","status":"streaming","content":[{"type":"output_text","text":"partial"}]}"#,
-            #"{"timestamp":1775408774216,"type":"message","role":"user","status":"completed","content":[{"type":"input_text","text":"next"}]}"#
-        ].joined(separator: "\n")
-
-        XCTAssertNil(AppState.codeBuddyLatestTerminalTurnTimestamp(in: transcript))
-    }
-
     private func timestampFrom(_ raw: String) throws -> Date {
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

@@ -229,7 +229,6 @@ guard !input.isEmpty,
 }
 
 // Generic compatibility: accept common camelCase aliases from third-party forks.
-// Keeps the Copilot-specific block below authoritative; only fills gaps for other sources.
 if json["hook_event_name"] == nil {
     if let event = nonEmptyString(json["hookEventName"]) {
         json["hook_event_name"] = event
@@ -250,26 +249,6 @@ if json["session_id"] == nil {
     } else if let data = json["data"] as? [String: Any],
               let sessionId = nonEmptyString(data["session_id"]) ?? nonEmptyString(data["sessionId"]) {
         json["session_id"] = sessionId
-    }
-}
-
-// Copilot CLI adaptation: its stdin JSON lacks session_id and hook_event_name.
-// Normalize Copilot's camelCase payload and pass through sessionId when present.
-if sourceTag == "copilot" {
-    if json["hook_event_name"] == nil, let event = eventTag {
-        json["hook_event_name"] = event
-    }
-    if json["session_id"] == nil, let sessionId = nonEmptyString(json["sessionId"]) {
-        json["session_id"] = sessionId
-    }
-    // Map Copilot-specific field names to internal conventions
-    if let toolName = json["toolName"] as? String {
-        json["tool_name"] = toolName
-    }
-    if let toolArgsStr = json["toolArgs"] as? String,
-       let argsData = toolArgsStr.data(using: .utf8),
-       let argsObj = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any] {
-        json["tool_input"] = argsObj
     }
 }
 

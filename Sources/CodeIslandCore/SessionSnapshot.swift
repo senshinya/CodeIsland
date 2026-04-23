@@ -46,8 +46,6 @@ public struct SessionSnapshot: Sendable {
     public var sessionTitleSource: SessionTitleSource?
     public var providerSessionId: String?
     public var transcriptPath: String?
-    /// nil = unchecked, false = not YOLO, true = YOLO
-    public var isYoloMode: Bool?
 
     public init(startTime: Date = Date()) {
         self.startTime = startTime
@@ -132,7 +130,6 @@ public struct SessionSnapshot: Sendable {
         if lower.contains("opus") { return "opus" }
         if lower.contains("sonnet") { return "sonnet" }
         if lower.contains("haiku") { return "haiku" }
-        if lower.contains("gemini") { return "gemini" }
         if let last = model.split(separator: "-").last, last.count <= 8 {
             return String(last)
         }
@@ -182,24 +179,14 @@ public struct SessionSnapshot: Sendable {
     /// Bundle IDs of native apps (not terminals)
     private static let appBundleNames: [String: String] = [
         "com.anthropic.claudefordesktop": "Claude",
-        "com.todesktop.230313mzl4w4u92": "Cursor",
-        "com.qoder.ide": "Qoder",
-        "com.factory.app": "Factory",
-        "com.tencent.codebuddy": "CodeBuddy",
         "com.openai.codex": "Codex",
-        "ai.opencode.desktop": "OpenCode",
     ]
 
     /// Maps native app bundle IDs to their expected source identifier.
-    /// Used by isNativeAppMode to distinguish "Cursor agent" from "Claude CLI in Cursor terminal".
+    /// Used by isNativeAppMode to distinguish native agents from terminal hosts.
     private static let appBundleSources: [String: String] = [
         "com.anthropic.claudefordesktop": "claude",
-        "com.todesktop.230313mzl4w4u92": "cursor",
-        "com.qoder.ide": "qoder",
-        "com.factory.app": "droid",
-        "com.tencent.codebuddy": "codebuddy",
         "com.openai.codex": "codex",
-        "ai.opencode.desktop": "opencode",
     ]
 
     /// Short terminal/app name for display tag
@@ -445,18 +432,6 @@ public func reduceEvent(
             sessions[sessionId]?.currentTool = nil
             sessions[sessionId]?.toolDescription = nil
         }
-    case "AfterAgentResponse":
-        // Cursor-specific: AI reply arrives here (in "text" field), not in Stop
-        let responseText = firstStringFromEvent(
-            event,
-            keys: ["text", "message"],
-            includeNested: true
-        )
-        if let text = responseText, !text.isEmpty {
-            sessions[sessionId]?.lastAssistantMessage = text
-            sessions[sessionId]?.addRecentMessage(ChatMessage(isUser: false, text: text))
-        }
-        sessions[sessionId]?.status = .processing
     case "Stop":
         // Detect ESC/Ctrl+C interruption
         let stopReason = event.rawJSON["stop_reason"] as? String ?? ""
