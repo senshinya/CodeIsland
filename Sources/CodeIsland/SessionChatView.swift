@@ -479,16 +479,27 @@ struct SessionChatView: View {
                         sendTriggeredScrollSettle = false
                         jumpToBottomWithFade(with: proxy)
                     } else {
-                        // Streaming path — cheap fast loop. At this point we're already
-                        // near the bottom from the previous scroll, so the rows being
-                        // updated are already materialized and 64ms is sufficient.
+                        // Streaming path. Yield (not sleep 16ms) so SwiftUI commits
+                        // the new row's layout, then scroll immediately. The previous
+                        // 16ms sleep meant the new row sat below the viewport while
+                        // its 0.18s opacity transition was already running; by the
+                        // time the first scroll revealed the row, easeOut had burned
+                        // ~9% of the duration ≈ 40% opacity. For pure-Text user rows
+                        // that reads as a visible "pause mid-fade"; MarkdownUI rows
+                        // mask it because their block-view first render outlasts the
+                        // 40%→100% remainder.
                         scrollToBottomTask?.cancel()
                         scrollToBottomTask = Task { @MainActor in
-                            for _ in 0..<4 {
+                            await Task.yield()
+                            guard !Task.isCancelled else { return }
+                            performScrollToBottom(with: proxy)
+                            // Retry for rows still settling height (MarkdownUI
+                            // streaming updates grow row height over several frames).
+                            for _ in 0..<3 {
                                 try? await Task.sleep(for: .milliseconds(16))
                                 guard !Task.isCancelled else { return }
-                                performScrollToBottom(with: proxy)
                                 if scrollController.isAtBottom { break }
+                                performScrollToBottom(with: proxy)
                             }
                             isPinnedToBottom = true
                             pendingPinnedScroll = false
