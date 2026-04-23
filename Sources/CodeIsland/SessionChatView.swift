@@ -46,6 +46,12 @@ struct SessionChatView: View {
     /// after the NotchAnimation.open spring settles. See `openAnimationGuardDelay`.
     @State private var canRenderMessageList = false
     @State private var isPinnedToBottom = true
+    /// When the user has scrolled away from the bottom, the visibleMessages window
+    /// freezes its head at this id so new-message appends grow the window downward
+    /// without dropping older rows at the top — which would shift the viewport
+    /// content upward since NSScrollView preserves contentOffset, not content meaning.
+    /// nil while pinned to bottom (window slides normally in that case).
+    @State private var visibleWindowAnchorID: String?
     @State private var newMessageCount = 0
     @State private var shouldAutoScrollOnNextLayout = true
     /// Set by sendMessage so the next onChange-driven scroll routes through the settle
@@ -81,10 +87,22 @@ struct SessionChatView: View {
         // cover most in-session history; older messages stay in the transcript
         // file and aren't lost, they're just not rendered in the chat panel.
         let limit = session.source == "codex" ? 120 : 150
-        if displayedMessages.count > limit {
-            return Array(displayedMessages.suffix(limit))
+        guard displayedMessages.count > limit else { return displayedMessages }
+
+        // While the user is scrolled up reading history, don't slide the window
+        // on each new message — that would drop the oldest row from the VStack's
+        // top and the viewport would appear to scroll upward since contentOffset
+        // is preserved in pixel space, not in row space. Anchor the window head
+        // on the row the user was looking at and grow downward as new messages
+        // arrive. Once the user returns to the bottom (isPinnedToBottom = true)
+        // the anchor is cleared and the window slides normally again.
+        if !isPinnedToBottom,
+           let anchorID = visibleWindowAnchorID,
+           let index = displayedMessages.firstIndex(where: { $0.id == anchorID }) {
+            return Array(displayedMessages[index...])
         }
-        return displayedMessages
+
+        return Array(displayedMessages.suffix(limit))
     }
 
     var body: some View {
@@ -114,6 +132,7 @@ struct SessionChatView: View {
             hasRevealedInitialContent = false
             canRenderMessageList = false
             isPinnedToBottom = true
+            visibleWindowAnchorID = nil
             newMessageCount = 0
             shouldAutoScrollOnNextLayout = true
             pendingPinnedScroll = false
@@ -308,13 +327,13 @@ struct SessionChatView: View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {
-                    // Eager VStack instead of LazyVStack. Rationale: the message list
-                    // is bounded (400 Claude / 240 Codex), LazyVStack's height-estimation
-                    // races with MarkdownUI's variable-height block rendering caused
-                    // scroll-to-bottom to land in unmaterialized regions (persistent
-                    // black panel). Eager layout trades a slightly slower first-render
-                    // for correct, race-free scroll positioning. See git history for
-                    // the /hunt sessions that arrived at this.
+                    // Eager VStack instead of LazyVStack. Rationale: the visible-window
+                    // is bounded (150 Claude / 120 Codex, see `visibleMessages`), and
+                    // LazyVStack's height-estimation races with MarkdownUI's variable-height
+                    // block rendering caused scroll-to-bottom to land in unmaterialized
+                    // regions (persistent black panel). Eager layout trades a slightly
+                    // slower first-render for correct, race-free scroll positioning.
+                    // See git history for the /hunt sessions that arrived at this.
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(visibleMessages) { msg in
                             messageRow(msg.message)
@@ -417,6 +436,16 @@ struct SessionChatView: View {
                 }
             }
             .onChange(of: isPinnedToBottom) { _, pinned in
+                // Freeze the visible-window head when the user scrolls away from the
+                // bottom; snapshot the current top row's id so subsequent appends grow
+                // the window downward without dropping the top. Clearing on re-pin lets
+                // the window resume its normal suffix-limit sliding behavior.
+                if pinned {
+                    visibleWindowAnchorID = nil
+                } else if visibleWindowAnchorID == nil {
+                    visibleWindowAnchorID = visibleMessages.first?.id
+                }
+
                 // Transitioning between A and B — restart or cancel the timer.
                 inlineCompletionAutoDismissTask?.cancel()
                 if pinned && appState.inlineCompletionSessionId == sessionId {
