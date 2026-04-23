@@ -1263,12 +1263,17 @@ struct SessionChatView: View {
             text: text,
             timestamp: Date()
         )
-        // Sending a message always pins to bottom — the user expects to see their own message.
+        // Only opt into the fade-out/jump-in path when the user was actually
+        // scrolled up; if they were already at the bottom, the pending append
+        // only grows the document slightly and the streaming path's light
+        // performScrollToBottom is enough. Otherwise the fade fires on every
+        // send and reads as a flicker even though no visible scroll is needed.
+        let wasAlreadyAtBottom = isPinnedToBottom
         isPinnedToBottom = true
         newMessageCount = 0
         shouldAutoScrollOnNextLayout = true
         pendingPinnedScroll = true
-        sendTriggeredScrollSettle = true
+        sendTriggeredScrollSettle = !wasAlreadyAtBottom
         pendingUserMessages.append(pendingMessage)
         Task { @MainActor in
             if watchedTranscriptPath == nil {
