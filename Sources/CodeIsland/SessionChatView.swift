@@ -347,7 +347,14 @@ struct SessionChatView: View {
                         ForEach(visibleMessages) { msg in
                             messageRow(msg.message)
                                 .id(msg.id)
-                                .transition(.opacity.animation(.easeOut(duration: 0.18)))
+                            // No .transition — pending user rows (fast first-render)
+                            // used to show the 0.18s opacity fade visibly, and the
+                            // streaming path's scroll loop + @State settle (64-80ms)
+                            // consistently landed inside it, producing a "pause mid
+                            // fade" artifact. Assistant rows have a MarkdownUI first
+                            // render that already outlasted the transition, so the
+                            // fade was never actually visible there — removing it is
+                            // consistent with what the user perceived as "normal".
                         }
                     }
                     .padding(.horizontal, 18)
