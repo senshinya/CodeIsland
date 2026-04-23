@@ -12,6 +12,7 @@ public struct HookEvent {
     public let eventName: String
     public let sessionId: String?
     public let toolName: String?
+    public let toolUseId: String?
     public let agentId: String?
     public let toolInput: [String: Any]?
     public let rawJSON: [String: Any]  // Full payload for event-specific fields
@@ -25,6 +26,8 @@ public struct HookEvent {
         self.sessionId = HookEvent.firstString(in: json, keys: ["session_id", "sessionId"])
         self.toolName = HookEvent.firstString(in: json, keys: ["tool_name", "toolName", "tool", "name"])
             ?? HookEvent.firstString(inNestedDictionary: json, containerKeys: ["tool", "payload", "data"], keys: ["name", "tool_name", "toolName"])
+        self.toolUseId = HookEvent.firstString(in: json, keys: ["tool_use_id", "toolUseId"])
+            ?? HookEvent.firstString(inNestedDictionary: json, containerKeys: ["tool", "tool_use", "toolUse", "payload", "data"], keys: ["id", "tool_use_id", "toolUseId"])
         self.toolInput = HookEvent.firstDictionary(in: json, keys: ["tool_input", "toolInput", "input", "arguments", "args", "params"])
             ?? HookEvent.firstDictionary(inNestedDictionary: json, containerKeys: ["tool", "payload", "data"], keys: ["input", "tool_input", "toolInput", "arguments", "args", "params"])
         self.agentId = HookEvent.firstString(in: json, keys: ["agent_id", "agentId"])

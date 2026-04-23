@@ -37,6 +37,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panelController?.showPanel()
 
         appState.startSessionDiscovery()
+        appState.startCodexAppServerWatcher()
 
         // Hooks auto-recovery: periodic + app activation trigger
         hookRecoveryTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
@@ -100,6 +101,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         teardownGlobalShortcut()
         appState.saveSessions()
         hookServer?.stop()
+        appState.stopCodexAppServerWatcher()
         appState.stopSessionDiscovery()
     }
 
