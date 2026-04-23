@@ -46,6 +46,12 @@ struct SessionChatView: View {
     /// after the NotchAnimation.open spring settles. See `openAnimationGuardDelay`.
     @State private var canRenderMessageList = false
     @State private var isPinnedToBottom = true
+    /// Set while a jump-to-bottom is transitioning: fade-out → instant scroll →
+    /// settle → fade-in. Used to hide the content during the scroll jump so the
+    /// user doesn't see the scroll re-positioning itself (which used to be a long
+    /// spring animation that stuttered with MarkdownUI re-layouts).
+    @State private var isPreparingJumpFade = false
+    @State private var jumpFadeTask: Task<Void, Never>?
     /// When the user has scrolled away from the bottom, the visibleMessages window
     /// freezes its head at this id so new-message appends grow the window downward
     /// without dropping older rows at the top — which would shift the viewport
@@ -145,6 +151,7 @@ struct SessionChatView: View {
             scrollToBottomTask?.cancel()
             initialContentRevealTask?.cancel()
             messageListGateTask?.cancel()
+            jumpFadeTask?.cancel()
             inlineCompletionAutoDismissTask?.cancel()
             isPerformingProgrammaticScroll = false
             stopWatchingTranscript()
@@ -370,21 +377,17 @@ struct SessionChatView: View {
             .coordinateSpace(name: "chat_scroll")
             .textSelection(.disabled)
             .frame(maxHeight: chatMaxHeight)
-            .opacity(hasRevealedInitialContent ? 1 : 0)
-            .animation(.easeIn(duration: 0.12), value: hasRevealedInitialContent)
+            // Opacity is driven by explicit `withAnimation` calls (revealInitialContent
+            // for the first reveal, jumpToBottomWithFade for pill/send jumps), so no
+            // `.animation(_:value:)` modifier here — both inputs need different curves
+            // and one value-scoped modifier can't serve both.
+            .opacity(hasRevealedInitialContent && !isPreparingJumpFade ? 1 : 0)
             .onAppear {
                 scrollController.onNewMessagesTapped = {
-                    // Optimistically treat the tap as "now pinned" so the floating
-                    // button hides immediately — the spring animation keeps running
-                    // and confirms reachedBottom at the end, un-pinning only if the
-                    // scroll truly failed to land at the bottom.
-                    isPinnedToBottom = true
-                    newMessageCount = 0
-                    // settle: true — polls document height stability and re-scrolls on
-                    // layout changes, which is required because MarkdownUI lazy rows
-                    // grow after the initial scroll jump and would otherwise leave us
-                    // stopped short of the real bottom (plus a flash of empty space).
-                    scrollToBottom(with: proxy, delay: nil, verifyBottom: true, settle: true, animated: true)
+                    // Fade-out → instant jump → settle → fade-in. Replaces the older
+                    // long spring scroll which stuttered whenever MarkdownUI rows were
+                    // still re-measuring during the animation.
+                    jumpToBottomWithFade(with: proxy)
                 }
                 scrollToBottom(with: proxy, isInitial: true)
             }
@@ -460,13 +463,12 @@ struct SessionChatView: View {
                 guard shouldAutoScrollOnNextLayout else { return }
                 if hasCompletedInitialScroll {
                     if sendTriggeredScrollSettle {
-                        // One-shot settle after sendMessage: we may be jumping across
-                        // unmaterialized lazy rows (user was scrolled up), so go through
-                        // the height-stability poll instead of the fast 4-loop. Otherwise
-                        // the jump exposes the scroll view's dark background before
-                        // MarkdownUI blocks finish painting (the "black flash").
+                        // After sendMessage when the user was scrolled up: fade + instant
+                        // jump + settle. Using the fade path hides both the scroll
+                        // re-position and any MarkdownUI black-flash during row
+                        // materialization.
                         sendTriggeredScrollSettle = false
-                        scrollToBottom(with: proxy, delay: nil, verifyBottom: true, settle: true, animated: true)
+                        jumpToBottomWithFade(with: proxy)
                     } else {
                         // Streaming path — cheap fast loop. At this point we're already
                         // near the bottom from the previous scroll, so the rows being
@@ -628,7 +630,67 @@ struct SessionChatView: View {
     private func revealInitialContent() {
         initialContentRevealTask?.cancel()
         initialContentRevealTask = nil
-        hasRevealedInitialContent = true
+        withAnimation(.easeIn(duration: 0.12)) {
+            hasRevealedInitialContent = true
+        }
+    }
+
+    /// Jump-to-bottom used by the "new messages" pill tap and the post-send scroll
+    /// when the user was scrolled up. The previous implementation animated a long
+    /// spring scroll that stuttered when MarkdownUI rows were still settling their
+    /// heights. This replaces it with: fade-out → instant scroll (while invisible)
+    /// → settle → fade-in, which is both smoother to look at and robust to rows
+    /// re-measuring during the settle window.
+    @MainActor
+    private func jumpToBottomWithFade(with proxy: ScrollViewProxy) {
+        // Optimistically mark pinned so the floating pill / count badge hide right
+        // away. `settle` at the end confirms reachedBottom and un-pins only if the
+        // scroll actually failed to land.
+        isPinnedToBottom = true
+        newMessageCount = 0
+        pendingPinnedScroll = false
+        shouldAutoScrollOnNextLayout = false
+
+        jumpFadeTask?.cancel()
+        jumpFadeTask = Task { @MainActor in
+            withAnimation(.easeIn(duration: 0.10)) {
+                isPreparingJumpFade = true
+            }
+            try? await Task.sleep(for: .milliseconds(110))
+            guard !Task.isCancelled else {
+                withAnimation(.easeOut(duration: 0.12)) { isPreparingJumpFade = false }
+                return
+            }
+
+            // Instant jump while invisible — disablesAnimations transaction inside
+            // performScrollToBottom keeps SwiftUI from interpolating the offset.
+            performScrollToBottom(with: proxy)
+
+            // Settle pass: MarkdownUI rows we skipped over (user was scrolled up)
+            // may re-measure now that they're near the viewport.
+            await settleInitialBottomLock(with: proxy)
+            guard !Task.isCancelled else {
+                withAnimation(.easeOut(duration: 0.12)) { isPreparingJumpFade = false }
+                return
+            }
+
+            let reachedBottom = await confirmBottomPosition(
+                with: proxy,
+                delays: InitialScrollTiming.finalVerificationDelays
+            )
+            guard !Task.isCancelled else {
+                withAnimation(.easeOut(duration: 0.12)) { isPreparingJumpFade = false }
+                return
+            }
+            isPinnedToBottom = reachedBottom
+            if reachedBottom {
+                newMessageCount = 0
+            }
+
+            withAnimation(.easeOut(duration: 0.18)) {
+                isPreparingJumpFade = false
+            }
+        }
     }
 
     private func waitForStableInitialLayout() async {
