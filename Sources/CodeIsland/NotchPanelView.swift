@@ -156,7 +156,7 @@ struct NotchPanelView: View {
                                 onBypass: { appState.bypassPermission() },
                                 onDismiss: { appState.dismissPermission() }
                             )
-                            .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .top)))
+                            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
                         }
                     case .questionCard(let sid):
                         let session = appState.sessions[sid]
@@ -174,7 +174,7 @@ struct NotchPanelView: View {
                                 onAnswerMulti: { appState.answerQuestionMulti($0) },
                                 onDismiss: { appState.dismissQuestion() }
                             )
-                            .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .top)))
+                            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
                         } else if let preview = appState.previewQuestionPayload {
                             QuestionBar(
                                 question: preview.question,
@@ -189,20 +189,20 @@ struct NotchPanelView: View {
                                 onAnswerMulti: { _ in },
                                 onDismiss: { }
                             )
-                            .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .top)))
+                            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
                         }
                     case .completionCard:
                         CompletionCardContent(appState: appState)
-                            .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .top)))
+                            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
                     case .sessionList:
                         SessionListView(appState: appState, onlySessionId: nil)
-                            .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .top)))
+                            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
                     case .chatHistory(let sid):
                         if let session = appState.sessions[sid] {
                             SessionChatView(sessionId: sid, session: session, appState: appState)
                                 .id(sid)
                                 .transition(.asymmetric(
-                                    insertion: .blurFade.combined(with: .move(edge: .trailing)),
+                                    insertion: .opacity.combined(with: .move(edge: .trailing)),
                                     removal: .liftFadeUp
                                 ))
                         }

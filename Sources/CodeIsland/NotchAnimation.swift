@@ -7,23 +7,14 @@ enum NotchAnimation {
     static let close = Animation.spring(response: 0.38, dampingFraction: 1.0)
     /// 通知弹出：快速弹跳，用于 completion/approval 自动展开
     static let pop = Animation.spring(response: 0.3, dampingFraction: 0.65)
+    /// 卡片快速消场：临界阻尼、短时长。用于 permission/question/completion 按钮
+    /// 回调触发的卡片退出，避免与入场/离场 transition 的插值互相抢占。
+    static let card = Animation.spring(response: 0.28, dampingFraction: 1.0)
     /// 微交互：hover 状态变化、按钮高亮等
     static let micro = Animation.easeOut(duration: 0.12)
 }
 
-// MARK: - Blur + Fade transition
-
-private struct BlurFadeModifier: ViewModifier {
-    let active: Bool
-    func body(content: Content) -> some View {
-        // No compositingGroup here: macOS 26 renders compositingGroup + blur
-        // (even with radius 0 in the identity state) transparent until a forced
-        // re-composition, which made the approval card invisible except on hover.
-        content
-            .blur(radius: active ? 5 : 0)
-            .opacity(active ? 0 : 1)
-    }
-}
+// MARK: - Lift + Fade transition
 
 private struct LiftFadeModifier: ViewModifier {
     let yOffset: CGFloat
@@ -38,14 +29,6 @@ private struct LiftFadeModifier: ViewModifier {
 }
 
 extension AnyTransition {
-    /// Blur out + fade — smoother than plain opacity for notch content switches.
-    static var blurFade: AnyTransition {
-        .modifier(
-            active: BlurFadeModifier(active: true),
-            identity: BlurFadeModifier(active: false)
-        )
-    }
-
     /// Short upward lift + fade, used when dismissing the chat panel.
     static var liftFadeUp: AnyTransition {
         .modifier(

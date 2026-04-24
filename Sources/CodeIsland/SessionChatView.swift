@@ -190,7 +190,7 @@ struct SessionChatView: View {
             .frame(height: 20)
             .contentShape(Rectangle())
             .onTapGesture {
-                withAnimation(NotchAnimation.open) {
+                withAnimation(NotchAnimation.card) {
                     appState.clearInlineCompletion(for: sessionId)
                 }
             }
@@ -216,7 +216,7 @@ struct SessionChatView: View {
                     )
                 }
             }
-            .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .bottom)))
+            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
         } else if let permission = appState.pendingPermission,
            (permission.event.sessionId ?? "default") == sessionId {
             VStack(spacing: 0) {
@@ -232,14 +232,14 @@ struct SessionChatView: View {
                     session: session,
                     sessionId: sessionId,
                     appState: appState,
-                    onAllow: { withAnimation(NotchAnimation.open) { appState.approvePermission(always: false) } },
-                    onAlwaysAllow: { withAnimation(NotchAnimation.open) { appState.approvePermission(always: true) } },
-                    onDeny: { withAnimation(NotchAnimation.open) { appState.denyPermission() } },
-                    onBypass: { withAnimation(NotchAnimation.open) { appState.bypassPermission() } },
-                    onDismiss: { withAnimation(NotchAnimation.open) { appState.dismissPermission() } }
+                    onAllow: { withAnimation(NotchAnimation.card) { appState.approvePermission(always: false) } },
+                    onAlwaysAllow: { withAnimation(NotchAnimation.card) { appState.approvePermission(always: true) } },
+                    onDeny: { withAnimation(NotchAnimation.card) { appState.denyPermission() } },
+                    onBypass: { withAnimation(NotchAnimation.card) { appState.bypassPermission() } },
+                    onDismiss: { withAnimation(NotchAnimation.card) { appState.dismissPermission() } }
                 )
             }
-            .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .bottom)))
+            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
         } else if let q = appState.pendingQuestion,
                   (q.event.sessionId ?? "default") == sessionId {
             VStack(spacing: 0) {
@@ -256,12 +256,12 @@ struct SessionChatView: View {
                     sessionContext: session.cwd,
                     queuePosition: 1,
                     queueTotal: appState.questionQueue.count,
-                    onAnswer: { answer in withAnimation(NotchAnimation.open) { appState.answerQuestion(answer) } },
-                    onAnswerMulti: { answers in withAnimation(NotchAnimation.open) { appState.answerQuestionMulti(answers) } },
-                    onDismiss: { withAnimation(NotchAnimation.open) { appState.dismissQuestion() } }
+                    onAnswer: { answer in withAnimation(NotchAnimation.card) { appState.answerQuestion(answer) } },
+                    onAnswerMulti: { answers in withAnimation(NotchAnimation.card) { appState.answerQuestionMulti(answers) } },
+                    onDismiss: { withAnimation(NotchAnimation.card) { appState.dismissQuestion() } }
                 )
             }
-            .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .bottom)))
+            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
         } else if SessionMessageBarSupport.canShow(for: session) {
             SessionMessageInputBar(
                 session: session,
@@ -271,7 +271,7 @@ struct SessionChatView: View {
                 onFocusChange: { appState.setMessageInputFocused($0) },
                 onSubmitText: { sendMessage($0) }
             )
-            .transition(.blurFade.combined(with: .scale(scale: 0.96, anchor: .bottom)))
+            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
         }
     }
 
@@ -1435,7 +1435,7 @@ struct PendingMessageReconciliation: Equatable {
 /// Target is recomputed every tick so the animation keeps tracking the bottom as
 /// lazily-rendered content grows the document; it terminates only once the spring
 /// is at rest AND the current bottom has stopped moving.
-private final class ScrollSpringAnimator {
+private final class ScrollSpringAnimator: NSObject {
     // Spring params roughly match SwiftUI's .spring(response: 0.45, dampingFraction: 0.85):
     // slight overshoot, snappy arrival. Y-clamp at maxY hides the overshoot visually.
     private let stiffness: CGFloat = 200
@@ -1443,11 +1443,10 @@ private final class ScrollSpringAnimator {
     private let mass: CGFloat = 1.0
 
     private weak var scrollView: NSScrollView?
-    private var timer: Timer?
+    private var displayLink: CADisplayLink?
     private var currentY: CGFloat = 0
     private var velocity: CGFloat = 0
     private var targetY: CGFloat = 0
-    private var lastTime: CFTimeInterval = 0
 
     var onFinish: (() -> Void)?
 
@@ -1460,32 +1459,35 @@ private final class ScrollSpringAnimator {
         currentY = scrollView.contentView.bounds.origin.y
         velocity = 0
         targetY = target
-        lastTime = CACurrentMediaTime()
 
-        let t = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
-            self?.step()
-        }
-        timer = t
-        RunLoop.main.add(t, forMode: .common)
+        // Bound the display link to the scroll view so it runs at the view's
+        // actual refresh rate (60Hz on standard displays, 120Hz on ProMotion).
+        // Ticks are vsync-aligned, unlike Timer, which eliminates judder from
+        // ticks landing between display commits.
+        let link = scrollView.displayLink(target: self, selector: #selector(tick(_:)))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
     }
 
     func cancel() {
-        guard timer != nil else { return }
-        timer?.invalidate()
-        timer = nil
+        guard displayLink != nil else { return }
+        displayLink?.invalidate()
+        displayLink = nil
         onFinish?()
     }
 
-    private func step() {
+    @objc private func tick(_ link: CADisplayLink) {
         guard let scrollView, let documentView = scrollView.documentView else {
             cancel()
             return
         }
 
-        let now = CACurrentMediaTime()
-        // Clamp dt so a stalled main thread doesn't produce a giant integration step.
-        let dt = max(CGFloat(1.0 / 240.0), min(CGFloat(now - lastTime), CGFloat(1.0 / 30.0)))
-        lastTime = now
+        // dt from the display link's own timestamps — already vsync-paced, so
+        // dt equals one frame interval in steady state. Clamp so a stalled main
+        // thread doesn't produce a giant integration step.
+        let dt = max(CGFloat(1.0 / 240.0),
+                     min(CGFloat(link.targetTimestamp - link.timestamp),
+                         CGFloat(1.0 / 30.0)))
 
         let viewportHeight = scrollView.contentView.bounds.height
         let documentHeight = documentView.bounds.height
