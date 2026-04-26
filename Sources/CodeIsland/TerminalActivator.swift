@@ -381,6 +381,26 @@ struct TerminalActivator {
             end if
             activate
         end tell
+
+        -- Final fallback via System Events: Ghostty's own `focus`/`activate` is unreliable
+        -- in some versions (issue #84), and even when it brings the app to front it doesn't
+        -- deminiaturize a window that's currently minimized to the dock. System Events
+        -- Accessibility API forces both. Wrapped in `try` so it silently no-ops if the
+        -- user hasn't granted Accessibility permission.
+        try
+            tell application "System Events"
+                tell process "Ghostty"
+                    set frontmost to true
+                    repeat with w in windows
+                        try
+                            if value of attribute "AXMinimized" of w is true then
+                                set value of attribute "AXMinimized" of w to false
+                            end if
+                        end try
+                    end repeat
+                end tell
+            end tell
+        end try
         """
         // Use /usr/bin/osascript to run AppleScript out-of-process (tmuxcc uses the same approach).
         // This avoids relying on NSAppleScript execution inside the app process.
@@ -491,6 +511,27 @@ struct TerminalActivator {
             bringToFront("Terminal")
             return
         }
+        // System Events Accessibility fallback — appended to each strategy script so we
+        // also force frontmost + AXMinimized=false in cases where Terminal.app's `windows`
+        // collection doesn't include a minimized window (some macOS 14 cases, issue #124).
+        // Wrapped in `try` so it silently no-ops without Accessibility permission.
+        let systemEventsFallback = """
+
+        try
+            tell application "System Events"
+                tell process "Terminal"
+                    set frontmost to true
+                    repeat with w in windows
+                        try
+                            if value of attribute "AXMinimized" of w is true then
+                                set value of attribute "AXMinimized" of w to false
+                            end if
+                        end try
+                    end repeat
+                end tell
+            end tell
+        end try
+        """
         // Strategy 1: tty match (precise)
         if let tty = ttyPath, !tty.isEmpty {
             let escaped = escapeAppleScript(tty)
@@ -507,7 +548,7 @@ struct TerminalActivator {
                 end repeat
                 activate
             end tell
-            """
+            """ + systemEventsFallback
             runAppleScript(script)
             return
         }
@@ -531,7 +572,7 @@ struct TerminalActivator {
                 end repeat
                 activate
             end tell
-            """
+            """ + systemEventsFallback
             runAppleScript(script)
             return
         }
