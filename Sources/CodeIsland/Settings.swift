@@ -3,7 +3,7 @@ import ServiceManagement
 
 enum AppVersion {
     /// Update this each release. Used as fallback when Info.plist is unavailable (debug builds).
-    static let fallback = "1.0.22.1-shinya"
+    static let fallback = "1.0.23.1-shinya"
 
     static var current: String {
         let base = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? fallback
@@ -97,6 +97,14 @@ enum SettingsKey {
     // Auto-approve tools (comma-separated tool names)
     static let autoApproveTools = "autoApproveTools"
 
+    // Buddy companion device
+    static let esp32BridgeEnabled = "esp32BridgeEnabled"
+    static let esp32HeartbeatSeconds = "esp32HeartbeatSeconds"
+    static let buddyScreenBrightnessPercent = "buddyScreenBrightnessPercent"
+    static let buddyScreenOrientation = "buddyScreenOrientation"
+    static let selectedBuddyIdentifier = "selectedBuddyIdentifier"
+    static let selectedBuddyName = "selectedBuddyName"
+
     // Hook cwd exclusion (comma-separated substrings; cwd containing any drops the event)
     static let excludedHookCwdSubstrings = "excludedHookCwdSubstrings"
 
@@ -184,6 +192,13 @@ struct SettingsDefaults {
     static let webhookEnabled = false
     static let webhookURL = ""
     static let webhookEventFilter = ""
+
+    static let esp32BridgeEnabled = false
+    static let esp32HeartbeatSeconds = 5.0
+    static let buddyScreenBrightnessPercent = 70.0
+    static let buddyScreenOrientation = "up"
+    static let selectedBuddyIdentifier = ""
+    static let selectedBuddyName = ""
 }
 
 @MainActor
@@ -253,6 +268,12 @@ class SettingsManager {
             SettingsKey.webhookEnabled: SettingsDefaults.webhookEnabled,
             SettingsKey.webhookURL: SettingsDefaults.webhookURL,
             SettingsKey.webhookEventFilter: SettingsDefaults.webhookEventFilter,
+            SettingsKey.esp32BridgeEnabled: SettingsDefaults.esp32BridgeEnabled,
+            SettingsKey.esp32HeartbeatSeconds: SettingsDefaults.esp32HeartbeatSeconds,
+            SettingsKey.buddyScreenBrightnessPercent: SettingsDefaults.buddyScreenBrightnessPercent,
+            SettingsKey.buddyScreenOrientation: SettingsDefaults.buddyScreenOrientation,
+            SettingsKey.selectedBuddyIdentifier: SettingsDefaults.selectedBuddyIdentifier,
+            SettingsKey.selectedBuddyName: SettingsDefaults.selectedBuddyName,
         ])
     }
 

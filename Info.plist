@@ -15,9 +15,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.22.1-shinya</string>
+	<string>1.0.23.1-shinya</string>
 	<key>CFBundleVersion</key>
-	<string>1.0.22.1-shinya</string>
+	<string>1.0.23.1-shinya</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>
@@ -27,5 +27,7 @@
 	</dict>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>CodeIsland needs to control terminal apps to jump to the correct window and tab when you click a session.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>CodeIsland uses Bluetooth to mirror the island onto Buddy.</string>
 </dict>
 </plist>

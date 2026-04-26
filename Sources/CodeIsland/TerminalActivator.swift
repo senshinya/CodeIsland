@@ -28,7 +28,9 @@ struct TerminalActivator {
     private static let appSources: [String: String] = [:]
 
     /// Fallback when Codex app is running but the hook payload lacks termBundleId.
-    private static let sourceToNativeAppBundleId: [String: String] = [
+    /// Non-private so `ESP32FocusCoordinator` can reuse the same map for its
+    /// "no session, but the desktop app is running" focus fallback.
+    static let sourceToNativeAppBundleId: [String: String] = [
         "codex": "com.openai.codex",
     ]
 
