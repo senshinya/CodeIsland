@@ -93,6 +93,17 @@ enum SettingsKey {
     static let collapsedWidthOffsetWorking = "collapsedWidthOffsetWorking"
     static let collapsedWidthPreview = "collapsedWidthPreview"   // Transient: "" / "idle" / "working"
     static let expandedWidth = "expandedWidth"                   // Double absolute width; 0 = use default
+
+    // Auto-approve tools (comma-separated tool names)
+    static let autoApproveTools = "autoApproveTools"
+
+    // Hook cwd exclusion (comma-separated substrings; cwd containing any drops the event)
+    static let excludedHookCwdSubstrings = "excludedHookCwdSubstrings"
+
+    // Webhook forwarding: POST hook events to an external URL
+    static let webhookEnabled = "webhookEnabled"
+    static let webhookURL = "webhookURL"
+    static let webhookEventFilter = "webhookEventFilter"  // comma-separated allow-list; empty = forward all
 }
 
 enum ExpandedUsageDisplayMode: String, CaseIterable, Identifiable {
@@ -163,6 +174,16 @@ struct SettingsDefaults {
     static let collapsedWidthOffsetIdle = 0.0
     static let collapsedWidthOffsetWorking = 0.0
     static let expandedWidth = 600.0
+
+    // ExitPlanMode is intentionally OFF by default — plan approval should require
+    // a user click, not be silently auto-approved.
+    static let autoApproveTools = "TaskCreate,TaskUpdate,TaskGet,TaskList,TaskOutput,TaskStop,TodoRead,TodoWrite,EnterPlanMode"
+
+    static let excludedHookCwdSubstrings = ""
+
+    static let webhookEnabled = false
+    static let webhookURL = ""
+    static let webhookEventFilter = ""
 }
 
 @MainActor
@@ -227,6 +248,11 @@ class SettingsManager {
             SettingsKey.collapsedWidthOffsetIdle: SettingsDefaults.collapsedWidthOffsetIdle,
             SettingsKey.collapsedWidthOffsetWorking: SettingsDefaults.collapsedWidthOffsetWorking,
             SettingsKey.expandedWidth: SettingsDefaults.expandedWidth,
+            SettingsKey.autoApproveTools: SettingsDefaults.autoApproveTools,
+            SettingsKey.excludedHookCwdSubstrings: SettingsDefaults.excludedHookCwdSubstrings,
+            SettingsKey.webhookEnabled: SettingsDefaults.webhookEnabled,
+            SettingsKey.webhookURL: SettingsDefaults.webhookURL,
+            SettingsKey.webhookEventFilter: SettingsDefaults.webhookEventFilter,
         ])
     }
 
@@ -398,6 +424,36 @@ class SettingsManager {
         set { defaults.set(newValue, forKey: SettingsKey.expandedWidth) }
     }
 
+    /// All known auto-approvable tool names (for UI display).
+    static let allAutoApproveTools: [(name: String, description: String)] = [
+        ("TaskCreate", "Create task"),
+        ("TaskUpdate", "Update task"),
+        ("TaskGet", "Get task"),
+        ("TaskList", "List tasks"),
+        ("TaskOutput", "Get task output"),
+        ("TaskStop", "Stop task"),
+        ("TodoRead", "Read todos"),
+        ("TodoWrite", "Write todos"),
+        ("EnterPlanMode", "Enter plan mode"),
+        ("ExitPlanMode", "Exit plan mode"),
+    ]
+
+    var autoApproveTools: Set<String> {
+        get {
+            let raw = defaults.string(forKey: SettingsKey.autoApproveTools) ?? SettingsDefaults.autoApproveTools
+            return Set(raw.split(separator: ",").map(String.init))
+        }
+        set {
+            defaults.set(newValue.sorted().joined(separator: ","), forKey: SettingsKey.autoApproveTools)
+        }
+    }
+
+    /// Comma-separated list of substrings; any hook event whose `cwd` contains
+    /// any of them is silently dropped by `HookServer` (#125 plugin / claude-mem).
+    var excludedHookCwdSubstrings: String {
+        get { defaults.string(forKey: SettingsKey.excludedHookCwdSubstrings) ?? SettingsDefaults.excludedHookCwdSubstrings }
+        set { defaults.set(newValue, forKey: SettingsKey.excludedHookCwdSubstrings) }
+    }
 }
 
 // MARK: - Shortcut Actions

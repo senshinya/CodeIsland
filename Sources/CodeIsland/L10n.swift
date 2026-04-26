@@ -110,6 +110,33 @@ final class L10n: ObservableObject {
         "tool_history_limit": "Tool History Limit",
         "tool_history_limit_desc": "Max number of recent tool calls shown per session",
 
+        // Auto-approve tools
+        "auto_approve_tools": "Auto-approve Tools",
+        "auto_approve_tools_desc": "These internal tools are auto-approved without showing a confirmation dialog. Disable tools you want to review manually.",
+        "auto_approve_TaskCreate": "Create a new task",
+        "auto_approve_TaskUpdate": "Update an existing task",
+        "auto_approve_TaskGet": "Get task details",
+        "auto_approve_TaskList": "List all tasks",
+        "auto_approve_TaskOutput": "Get task output",
+        "auto_approve_TaskStop": "Stop a running task",
+        "auto_approve_TodoRead": "Read todo list",
+        "auto_approve_TodoWrite": "Write todo list",
+        "auto_approve_EnterPlanMode": "Enter plan mode",
+        "auto_approve_ExitPlanMode": "Exit plan mode and request approval",
+
+        // Excluded hook cwd
+        "excluded_hook_cwd_title": "Ignore Hooks From Paths",
+        "excluded_hook_cwd_desc": "Comma-separated substrings. Any hook event whose working directory contains one of them is silently dropped — useful for filtering out background plugins like claude-mem. Example: .claude-mem,.cache/agents",
+        "excluded_hook_cwd_placeholder": "e.g. .claude-mem,.cache/agents",
+
+        // Webhook forwarding
+        "webhook_title": "Webhook Forwarding",
+        "webhook_desc": "Forward hook events to an external HTTP endpoint as JSON. Useful for piping agent activity into DingTalk / Lark / Slack via a generic webhook receiver. Failures are silently ignored.",
+        "webhook_enable": "Enable webhook forwarding",
+        "webhook_url_placeholder": "https://your.webhook.example/hook",
+        "webhook_filter_placeholder": "Optional: Stop,SessionEnd,PermissionRequest",
+        "webhook_filter_hint": "Comma-separated event names; empty = forward every event. Names can be normalized (PreToolUse) or raw (pre_tool_use).",
+
         // Appearance
         "preview": "Preview",
         "panel": "Panel",
@@ -327,6 +354,33 @@ final class L10n: ObservableObject {
         "10_seconds": "10 秒",
         "tool_history_limit": "工具历史上限",
         "tool_history_limit_desc": "每个会话显示的最近工具调用数量上限",
+
+        // Auto-approve tools
+        "auto_approve_tools": "自动批准工具",
+        "auto_approve_tools_desc": "这些内部工具会自动批准，无需弹出确认对话框。关闭你想要手动审核的工具。",
+        "auto_approve_TaskCreate": "创建新任务",
+        "auto_approve_TaskUpdate": "更新已有任务",
+        "auto_approve_TaskGet": "获取任务详情",
+        "auto_approve_TaskList": "列出所有任务",
+        "auto_approve_TaskOutput": "获取任务输出",
+        "auto_approve_TaskStop": "停止运行中的任务",
+        "auto_approve_TodoRead": "读取待办列表",
+        "auto_approve_TodoWrite": "写入待办列表",
+        "auto_approve_EnterPlanMode": "进入计划模式",
+        "auto_approve_ExitPlanMode": "退出计划模式并请求审批",
+
+        // 忽略指定路径的 Hook
+        "excluded_hook_cwd_title": "忽略指定路径的 Hook",
+        "excluded_hook_cwd_desc": "用逗号分隔的子串。任何 hook 事件的工作目录如果包含其中之一就会被静默丢弃 —— 适合过滤 claude-mem 等后台插件。示例：.claude-mem,.cache/agents",
+        "excluded_hook_cwd_placeholder": "例如 .claude-mem,.cache/agents",
+
+        // Webhook 转发
+        "webhook_title": "Webhook 转发",
+        "webhook_desc": "把 hook 事件以 JSON 形式 POST 到外部 HTTP 端点。适合对接钉钉 / 飞书 / Slack 的通用 webhook 接收器，监控 agent 活动。失败静默忽略。",
+        "webhook_enable": "启用 Webhook 转发",
+        "webhook_url_placeholder": "https://你的.webhook.地址/hook",
+        "webhook_filter_placeholder": "可选：Stop,SessionEnd,PermissionRequest",
+        "webhook_filter_hint": "逗号分隔的事件名，留空 = 转发所有事件。支持规范化名（PreToolUse）或原始名（pre_tool_use）。",
 
         // Appearance
         "preview": "预览",

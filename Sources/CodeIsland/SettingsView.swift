@@ -186,6 +186,22 @@ private struct BehaviorPage: View {
     @AppStorage(SettingsKey.sessionTimeout) private var sessionTimeout = SettingsDefaults.sessionTimeout
     @AppStorage(SettingsKey.rotationInterval) private var rotationInterval = SettingsDefaults.rotationInterval
     @AppStorage(SettingsKey.maxToolHistory) private var maxToolHistory = SettingsDefaults.maxToolHistory
+    @AppStorage(SettingsKey.autoApproveTools) private var autoApproveRaw: String = SettingsDefaults.autoApproveTools
+    @AppStorage(SettingsKey.excludedHookCwdSubstrings) private var excludedHookCwdSubstrings: String = SettingsDefaults.excludedHookCwdSubstrings
+    @AppStorage(SettingsKey.webhookEnabled) private var webhookEnabled: Bool = SettingsDefaults.webhookEnabled
+    @AppStorage(SettingsKey.webhookURL) private var webhookURL: String = SettingsDefaults.webhookURL
+    @AppStorage(SettingsKey.webhookEventFilter) private var webhookEventFilter: String = SettingsDefaults.webhookEventFilter
+
+    private func autoApproveBinding(for name: String) -> Binding<Bool> {
+        Binding(
+            get: { autoApproveRaw.split(separator: ",").contains(Substring(name)) },
+            set: { isOn in
+                var set = Set(autoApproveRaw.split(separator: ",").map(String.init))
+                if isOn { set.insert(name) } else { set.remove(name) }
+                autoApproveRaw = set.sorted().joined(separator: ",")
+            }
+        )
+    }
 
     var body: some View {
         Form {
@@ -267,6 +283,52 @@ private struct BehaviorPage: View {
                 } label: {
                     Text(l10n["tool_history_limit"])
                     Text(l10n["tool_history_limit_desc"])
+                }
+            }
+
+            Section(l10n["auto_approve_tools"]) {
+                Text(l10n["auto_approve_tools_desc"])
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(SettingsManager.allAutoApproveTools, id: \.name) { tool in
+                    Toggle(isOn: autoApproveBinding(for: tool.name)) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(tool.name)
+                                .font(.system(size: 12, design: .monospaced))
+                            Text(l10n["auto_approve_\(tool.name)"])
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+
+            Section(l10n["excluded_hook_cwd_title"]) {
+                Text(l10n["excluded_hook_cwd_desc"])
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField(l10n["excluded_hook_cwd_placeholder"], text: $excludedHookCwdSubstrings)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12, design: .monospaced))
+            }
+
+            Section(l10n["webhook_title"]) {
+                Text(l10n["webhook_desc"])
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Toggle(l10n["webhook_enable"], isOn: $webhookEnabled)
+                if webhookEnabled {
+                    TextField(l10n["webhook_url_placeholder"], text: $webhookURL)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12, design: .monospaced))
+                        .autocorrectionDisabled(true)
+                    TextField(l10n["webhook_filter_placeholder"], text: $webhookEventFilter)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12, design: .monospaced))
+                        .autocorrectionDisabled(true)
+                    Text(l10n["webhook_filter_hint"])
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }

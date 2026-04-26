@@ -108,11 +108,82 @@ class HookServer {
     }
 
     /// Internal tools that are safe to auto-approve without user confirmation.
-    private static let autoApproveTools: Set<String> = [
-        "TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "TaskOutput", "TaskStop",
-        "TodoRead", "TodoWrite",
-        "EnterPlanMode", "ExitPlanMode",
-    ]
+    /// Read from user settings; defaults to all known internal tools except ExitPlanMode.
+    private static var autoApproveTools: Set<String> {
+        SettingsManager.shared.autoApproveTools
+    }
+
+    /// User-configured cwd substring blocklist for plugin/background hooks (e.g. claude-mem).
+    /// Empty default = no filtering. Trimmed, blank entries skipped.
+    private static func eventMatchesExcludedCwd(_ cwd: String) -> Bool {
+        cwdMatchesAnyPattern(cwd, patternsCSV: SettingsManager.shared.excludedHookCwdSubstrings)
+    }
+
+    /// Pure substring blocklist match — returns true if `cwd` contains any
+    /// non-empty trimmed entry of `patternsCSV`. Extracted for testability;
+    /// `nonisolated` because it touches no actor state.
+    nonisolated static func cwdMatchesAnyPattern(_ cwd: String, patternsCSV: String) -> Bool {
+        guard !patternsCSV.isEmpty else { return false }
+        for entry in patternsCSV.split(separator: ",", omittingEmptySubsequences: false) {
+            let pattern = entry.trimmingCharacters(in: .whitespaces)
+            if !pattern.isEmpty, cwd.contains(pattern) { return true }
+        }
+        return false
+    }
+
+    /// Fire-and-forget POST of the hook event to a user-configured webhook URL.
+    /// Wraps the raw event in a small envelope (event/source/session/cwd/tool/raw)
+    /// so users on the receiving side don't need to dig through bridge-internal
+    /// fields. Optional event-name allow-list filters noisy event types. (#115)
+    private static func forwardEventToWebhook(_ event: HookEvent) {
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: SettingsKey.webhookEnabled) else { return }
+        // Trim whitespace — users routinely paste URLs with leading/trailing space
+        // and URL(string:) silently rejects those (RFC 3986 forbids whitespace).
+        let urlString = (defaults.string(forKey: SettingsKey.webhookURL) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !urlString.isEmpty,
+              let endpoint = URL(string: urlString) else { return }
+
+        let normalizedName = EventNormalizer.normalize(event.eventName)
+
+        // Event filter: comma-separated allow-list. Empty = forward all.
+        // Match on either the normalized name (PreToolUse) or raw name (pre_tool_use).
+        if let filter = defaults.string(forKey: SettingsKey.webhookEventFilter),
+           !filter.trimmingCharacters(in: .whitespaces).isEmpty {
+            let allowed = filter.split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            guard allowed.contains(normalizedName) || allowed.contains(event.eventName) else { return }
+        }
+
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        let envelope: [String: Any] = [
+            "event": normalizedName,
+            "raw_event": event.eventName,
+            "session_id": event.sessionId ?? "",
+            "source": event.rawJSON["_source"] as? String ?? "",
+            "cwd": event.rawJSON["cwd"] as? String ?? "",
+            "tool_name": event.toolName ?? "",
+            "timestamp": isoFormatter.string(from: Date()),
+            "raw": event.rawJSON,
+        ]
+
+        guard let body = try? JSONSerialization.data(withJSONObject: envelope) else { return }
+
+        var request = URLRequest(url: endpoint, timeoutInterval: 5)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("CodeIsland-Webhook/1.0", forHTTPHeaderField: "User-Agent")
+        request.httpBody = body
+
+        URLSession.shared.dataTask(with: request) { _, _, _ in
+            // Fire-and-forget. Failures are intentionally swallowed: a flaky
+            // webhook should never break the hook event pipeline.
+        }.resume()
+    }
 
     private func processRequest(data: Data, connection: NWConnection) {
         guard let event = HookEvent(from: data) else {
@@ -125,6 +196,21 @@ class HookServer {
             sendResponse(connection: connection, data: Data("{}".utf8))
             return
         }
+
+        // User-configured cwd exclusion: drop hooks fired by background plugins
+        // (e.g. claude-mem, agent loops) whose cwd matches any user-provided
+        // substring. Default empty list = no filtering. (#125)
+        if let cwd = event.rawJSON["cwd"] as? String,
+           !cwd.isEmpty,
+           Self.eventMatchesExcludedCwd(cwd) {
+            sendResponse(connection: connection, data: Data("{}".utf8))
+            return
+        }
+
+        // User-configured webhook forwarding: fire-and-forget POST to an external URL.
+        // Runs *before* the route handlers so it doesn't add latency to user-facing
+        // permission/question UI. Disabled by default. (#115)
+        Self.forwardEventToWebhook(event)
 
         if event.eventName == "PermissionRequest" {
             let sessionId = event.sessionId ?? "default"
