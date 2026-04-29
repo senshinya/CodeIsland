@@ -411,25 +411,16 @@ struct ConfigInstaller {
         return lowest
     }
 
-    /// Run `<path> --version` and parse "2.1.92 (Claude Code)" → "2.1.92"
+    /// Run `<path> --version` and parse "2.1.92 (Claude Code)" → "2.1.92".
+    /// 5s timeout: a stuck `claude --version` used to freeze app launch (#139).
     private static func readClaudeVersion(at path: String) -> String? {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: path)
-        proc.arguments = ["--version"]
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = FileHandle.nullDevice
-        do {
-            try proc.run()
-            proc.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            guard let output = String(data: data, encoding: .utf8) else { return nil }
-            let version = output.trimmingCharacters(in: .whitespacesAndNewlines)
-                .components(separatedBy: " ").first ?? ""
-            return version.isEmpty ? nil : version
-        } catch {
+        guard let data = ProcessRunner.run(path: path, args: ["--version"], timeout: 5),
+              let output = String(data: data, encoding: .utf8) else {
             return nil
         }
+        let version = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: " ").first ?? ""
+        return version.isEmpty ? nil : version
     }
 
     /// Compare semver strings: returns true if `installed` >= `required`
