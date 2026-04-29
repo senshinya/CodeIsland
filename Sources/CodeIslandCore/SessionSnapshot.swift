@@ -375,12 +375,17 @@ public func reduceEvent(
         sessions[sessionId]?.status = .processing
         sessions[sessionId]?.currentTool = nil
         sessions[sessionId]?.toolDescription = nil
-        // Try multiple possible field names for user prompt
-        let prompt = event.rawJSON["prompt"] as? String
-            ?? event.rawJSON["user_prompt"] as? String
-            ?? event.rawJSON["message"] as? String
-            ?? event.rawJSON["input"] as? String
-            ?? event.rawJSON["content"] as? String
+        // Probe a wider set of field names + nested containers. Qwen Code (#103),
+        // Hermes (#117), and most Claude forks put the prompt at "prompt" top-level,
+        // but some forks nest it inside `input` / `data` / `payload` / `params`,
+        // and Cursor's `beforeSubmitPrompt` uses a different shape. Empty strings
+        // are skipped so we don't insert blank chat rows when a hook fires with
+        // a placeholder.
+        let prompt = firstStringFromEvent(
+            event,
+            keys: ["prompt", "user_prompt", "userPrompt", "message", "input", "content", "text"],
+            includeNested: true
+        )
         if let prompt {
             sessions[sessionId]?.lastUserPrompt = prompt
             if sessions[sessionId]?.recentMessages.last?.isUser == true {

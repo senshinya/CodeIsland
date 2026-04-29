@@ -133,10 +133,12 @@ struct DiagnosticsExporter {
                 "timestamp": isoFormatter.string(from: event.timestamp),
                 "eventName": event.eventName,
                 "viaPlugin": event.viaPlugin,
+                "payloadKeys": event.payloadKeys,
             ]
             if let source = event.source { dict["source"] = source }
             if let sessionId = event.sessionId { dict["sessionId"] = String(sessionId.prefix(12)) }
             if let toolName = event.toolName { dict["toolName"] = toolName }
+            if let preview = event.promptPreview { dict["promptPreview"] = preview }
             return dict
         }
     }

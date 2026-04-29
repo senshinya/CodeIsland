@@ -253,13 +253,33 @@ class HookServer {
         }
 
         // Diagnostics ring buffer (#103): record the post-merge view of the
-        // event so the export reflects what was actually dispatched.
+        // event so the export reflects what was actually dispatched. Also
+        // capture the field names the hook arrived with and a prompt preview
+        // so future "prompt not showing" reports can be diagnosed without
+        // round-tripping for more data.
+        let payloadKeys = event.rawJSON.keys
+            .filter { !$0.hasPrefix("_") }  // drop bridge-injected metadata fields
+            .sorted()
+        let promptPreview: String? = {
+            let candidates = ["prompt", "user_prompt", "userPrompt", "message", "input", "content", "text"]
+            for key in candidates {
+                if let s = event.rawJSON[key] as? String {
+                    let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        return String(trimmed.prefix(80))
+                    }
+                }
+            }
+            return nil
+        }()
         appState.recordHookEvent(
             source: event.rawJSON["_source"] as? String,
             sessionId: event.sessionId,
             eventName: event.eventName,
             toolName: event.toolName,
-            viaPlugin: (event.rawJSON["_via_plugin"] as? Bool) == true
+            viaPlugin: (event.rawJSON["_via_plugin"] as? Bool) == true,
+            payloadKeys: payloadKeys,
+            promptPreview: promptPreview
         )
 
         if let rawSource = event.rawJSON["_source"] as? String,

@@ -17,6 +17,12 @@ final class AppState {
     /// Snapshot of a hook event accepted by HookServer, kept for diagnostics
     /// export (#103). Stored in a fixed-size ring so we can attach the recent
     /// hook stream to bug reports without pulling in full payloads.
+    ///
+    /// `payloadKeys` lists the top-level JSON field names the hook arrived
+    /// with (sorted, no values), and `promptPreview` is a 80-char prefix of
+    /// any extracted user prompt. Together those let us tell at a glance
+    /// whether a hook fired with an empty / missing prompt vs. fired with a
+    /// prompt that the UI then dropped.
     struct DiagnosticHookEvent: Sendable {
         let timestamp: Date
         let source: String?
@@ -24,6 +30,8 @@ final class AppState {
         let eventName: String
         let toolName: String?
         let viaPlugin: Bool
+        let payloadKeys: [String]
+        let promptPreview: String?
     }
 
     var sessions: [String: SessionSnapshot] = [:]
@@ -44,7 +52,9 @@ final class AppState {
         sessionId: String?,
         eventName: String,
         toolName: String?,
-        viaPlugin: Bool
+        viaPlugin: Bool,
+        payloadKeys: [String],
+        promptPreview: String?
     ) {
         recentHookEvents.append(DiagnosticHookEvent(
             timestamp: Date(),
@@ -52,7 +62,9 @@ final class AppState {
             sessionId: sessionId,
             eventName: eventName,
             toolName: toolName,
-            viaPlugin: viaPlugin
+            viaPlugin: viaPlugin,
+            payloadKeys: payloadKeys,
+            promptPreview: promptPreview
         ))
         if recentHookEvents.count > maxRecentHookEvents {
             recentHookEvents.removeFirst(recentHookEvents.count - maxRecentHookEvents)
