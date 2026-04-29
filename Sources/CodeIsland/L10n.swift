@@ -264,7 +264,7 @@ final class L10n: ObservableObject {
         // Menu
         "settings_ellipsis": "Settings...",
         "export_diagnostics": "Export Diagnostics...",
-        "export_diagnostics_desc": "Create a zip with logs, settings and session state for bug reports",
+        "export_diagnostics_desc": "Create a zip with logs, settings, session state and recent hook events (event names, sources, first 80 chars of any prompts) for bug reports",
         "reinstall_hooks": "Reinstall Hooks",
         "remove_hooks": "Remove Hooks",
         "quit": "Quit",
@@ -552,7 +552,7 @@ final class L10n: ObservableObject {
         // Menu
         "settings_ellipsis": "设置...",
         "export_diagnostics": "导出诊断信息...",
-        "export_diagnostics_desc": "创建包含日志、设置和会话状态的 zip 文件，用于反馈 Bug",
+        "export_diagnostics_desc": "创建包含日志、设置、会话状态以及最近 hook 事件（事件名、来源、提示词前 80 字符）的 zip 文件，用于反馈 Bug",
         "reinstall_hooks": "重新安装 Hooks",
         "remove_hooks": "卸载 Hooks",
         "quit": "退出",

@@ -379,18 +379,28 @@ struct ConfigInstaller {
 
     // MARK: - CLI Version Detection
 
-    /// Detect installed Claude Code version by running `claude --version`
+    /// Detect installed Claude Code version by running `claude --version`.
+    /// Cache is guarded by a lock because `install()` and `verifyAndRepair()`
+    /// can both call this from `Task.detached` since #139 (#103 review).
     private static var cachedClaudeVersion: String?
     private static var claudeVersionOverride: String?
+    private static let cachedClaudeVersionLock = NSLock()
 
     static func setClaudeVersionOverride(_ version: String?) {
         claudeVersionOverride = version
+        cachedClaudeVersionLock.lock()
         cachedClaudeVersion = nil
+        cachedClaudeVersionLock.unlock()
     }
 
     private static func detectClaudeVersion() -> String? {
         if let override = claudeVersionOverride { return override }
-        if let cached = cachedClaudeVersion { return cached }
+        cachedClaudeVersionLock.lock()
+        if let cached = cachedClaudeVersion {
+            cachedClaudeVersionLock.unlock()
+            return cached
+        }
+        cachedClaudeVersionLock.unlock()
         // GUI apps don't inherit the user's shell PATH, so probe common install
         // locations directly. If more than one claude binary is present, pick the
         // lowest version — whichever one actually reads settings.json could be the
@@ -412,7 +422,9 @@ struct ConfigInstaller {
         guard let lowest = versions.min(by: { !versionAtLeast($0, $1) }) else {
             return nil
         }
+        cachedClaudeVersionLock.lock()
         cachedClaudeVersion = lowest
+        cachedClaudeVersionLock.unlock()
         return lowest
     }
 

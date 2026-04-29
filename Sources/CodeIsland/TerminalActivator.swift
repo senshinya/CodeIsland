@@ -412,7 +412,9 @@ struct TerminalActivator {
         """
         // Use /usr/bin/osascript to run AppleScript out-of-process (tmuxcc uses the same approach).
         // This avoids relying on NSAppleScript execution inside the app process.
-        runOsaScript(script)
+        // Already on a background queue (see DispatchQueue.global wrap above) — call the
+        // _Sync variant to skip an extra dispatch hop.
+        runOsaScriptSync(script)
         } // end DispatchQueue.global async
     }
 
@@ -967,13 +969,20 @@ struct TerminalActivator {
 
     private static func runOsaScript(_ source: String) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            proc.arguments = ["-e", source]
-            proc.standardOutput = FileHandle.nullDevice
-            proc.standardError = FileHandle.nullDevice
-            try? proc.run()
+            runOsaScriptSync(source)
         }
+    }
+
+    /// Run osascript on the current queue (no extra dispatch). Use from
+    /// callers that are already on a background queue to avoid the double
+    /// hop activateGhostty would otherwise pay (#139 review).
+    private static func runOsaScriptSync(_ source: String) {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        proc.arguments = ["-e", source]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        try? proc.run()
     }
 
     /// Escape special characters for AppleScript string interpolation

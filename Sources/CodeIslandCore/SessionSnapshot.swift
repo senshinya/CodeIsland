@@ -545,8 +545,12 @@ public func reduceEvent(
 private func firstStringFromDict(_ dict: [String: Any], keys: [String]) -> String? {
     for key in keys {
         if let value = dict[key] as? String {
-            let trimmed = value.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-            if !trimmed.isEmpty { return trimmed }
+            // Trim only to detect empty / whitespace-only payloads; return the
+            // original value so callers preserve any leading/trailing
+            // whitespace inside code-snippet prompts and multi-line content.
+            if !value.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty {
+                return value
+            }
         }
     }
     return nil
