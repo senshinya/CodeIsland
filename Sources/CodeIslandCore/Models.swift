@@ -38,13 +38,16 @@ public struct HookEvent {
         if let input = toolInput {
             switch toolName {
             case "Bash":
-                // Prefer the human-readable description over raw command
-                if let desc = input["description"] as? String, !desc.isEmpty { return desc }
-                if let cmd = input["command"] as? String {
-                    // Show first meaningful line, trimmed
-                    let line = cmd.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? cmd
-                    return String(line.prefix(60))
+                let desc = HookEvent.normalizedMultilineString(input["description"])
+                let cmd = HookEvent.normalizedMultilineString(input["command"])
+                if let desc, let cmd {
+                    if desc == cmd || desc.contains(cmd) {
+                        return desc
+                    }
+                    return "\(desc)\nCommand:\n\(cmd)"
                 }
+                if let desc { return desc }
+                if let cmd { return cmd }
             case "Read":
                 if let fp = input["file_path"] as? String {
                     let name = (fp as NSString).lastPathComponent
@@ -99,6 +102,12 @@ public struct HookEvent {
         if let agentType = rawJSON["agent_type"] as? String { return agentType }
         if let prompt = rawJSON["prompt"] as? String { return String(prompt.prefix(40)) }
         return nil
+    }
+
+    private static func normalizedMultilineString(_ value: Any?) -> String? {
+        guard let text = value as? String else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func firstString(in dict: [String: Any], keys: [String]) -> String? {
