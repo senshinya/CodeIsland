@@ -109,6 +109,11 @@ struct ConfigInstaller {
                 ("UserPromptSubmit", 5, false),
                 ("PreToolUse", 5, false),
                 ("PostToolUse", 5, false),
+                // Codex fires PermissionRequest before shell escalation /
+                // managed-network approvals. Without this hook the panel
+                // stays in "running" and the approval sound never plays —
+                // see issue #145 and developers.openai.com/codex/hooks.
+                ("PermissionRequest", 86400, false),
                 ("Stop", 5, false),
             ],
             rootOverride: { ConfigInstaller.codexHome() }
