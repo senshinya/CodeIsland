@@ -19,6 +19,7 @@ final class ConfigInstallerTests: XCTestCase {
             "UserPromptSubmit",
             "PreToolUse",
             "PostToolUse",
+            "PermissionRequest",
             "Stop",
         ])
     }
