@@ -111,6 +111,11 @@ final class L10n: ObservableObject {
         "10_seconds": "10 Seconds",
         "tool_history_limit": "Tool History Limit",
         "tool_history_limit_desc": "Max number of recent tool calls shown per session",
+        "plugin_session_mode": "Plugin Sub-Sessions",
+        "plugin_session_mode_desc": "How to handle hook events fired by plugins running inside another agent (e.g. omo inside OpenCode)",
+        "plugin_session_mode_separate": "Show separately",
+        "plugin_session_mode_merge": "Merge into main",
+        "plugin_session_mode_hide": "Hide",
 
         // Auto-approve tools
         "auto_approve_tools": "Auto-approve Tools",
@@ -394,6 +399,11 @@ final class L10n: ObservableObject {
         "10_seconds": "10 秒",
         "tool_history_limit": "工具历史上限",
         "tool_history_limit_desc": "每个会话显示的最近工具调用数量上限",
+        "plugin_session_mode": "插件子会话",
+        "plugin_session_mode_desc": "处理在其他 agent 内运行的插件触发的事件（例如 OpenCode 中的 omo 插件）",
+        "plugin_session_mode_separate": "独立显示",
+        "plugin_session_mode_merge": "合并到主会话",
+        "plugin_session_mode_hide": "隐藏",
 
         // Auto-approve tools
         "auto_approve_tools": "自动批准工具",

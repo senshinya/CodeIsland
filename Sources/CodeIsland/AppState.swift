@@ -1196,6 +1196,17 @@ final class AppState {
         refreshDerivedState()
     }
 
+    /// Find an existing session whose source matches and whose CLI PID equals
+    /// the supplied ppid. Used by HookServer to merge plugin-proxied events
+    /// (e.g. omo) into their main session when pluginSessionMode == "merge". (#123)
+    func findSessionId(forSource source: String, ppid: Int) -> String? {
+        let normalized = SessionSnapshot.normalizedSupportedSource(source)
+        return sessions.first(where: { _, snap in
+            let snapSource = SessionSnapshot.normalizedSupportedSource(snap.source)
+            return snapSource == normalized && snap.cliPid == pid_t(ppid)
+        })?.key
+    }
+
     func denyPermission() {
         guard !permissionQueue.isEmpty else { return }
         let pending = permissionQueue.removeFirst()

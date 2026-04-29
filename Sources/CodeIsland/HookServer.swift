@@ -185,8 +185,69 @@ class HookServer {
         }.resume()
     }
 
+    private static func hiddenPluginResponse(for raw: [String: Any]) -> Data {
+        // Hidden PermissionRequest must allow so the plugin's tool execution
+        // doesn't block waiting on a UI prompt the user said to suppress.
+        let eventName = (raw["hook_event_name"] as? String
+            ?? raw["hookEventName"] as? String
+            ?? raw["event_name"] as? String
+            ?? "").lowercased()
+        if eventName.contains("permission") {
+            return Data(#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#.utf8)
+        }
+        return Data("{}".utf8)
+    }
+
+    private static func pluginPpid(from raw: [String: Any]) -> Int? {
+        if let p = raw["_ppid"] as? Int { return p }
+        if let p = raw["_ppid"] as? Int32 { return Int(p) }
+        if let p = raw["_ppid"] as? NSNumber { return p.intValue }
+        return nil
+    }
+
+    static func routeKind(for event: HookEvent) -> RouteKind {
+        let normalizedEventName = EventNormalizer.normalize(event.eventName)
+        if normalizedEventName == "PermissionRequest" {
+            return .permission
+        }
+        if normalizedEventName == "Notification", QuestionPayload.from(event: event) != nil {
+            return .question
+        }
+        return .event
+    }
+
     private func processRequest(data: Data, connection: NWConnection) {
-        guard let event = HookEvent(from: data) else {
+        // Plugin session mode pre-filter (#123): events that arrived through a
+        // plugin proxy (bridge marks them with `_via_plugin`) can be merged
+        // into the matching main session, hidden, or kept separate per the
+        // user's setting. "separate" preserves prior behavior.
+        var processedData = data
+        if let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           (raw["_via_plugin"] as? Bool) == true {
+            let mode = UserDefaults.standard.string(forKey: SettingsKey.pluginSessionMode)
+                ?? SettingsDefaults.pluginSessionMode
+            switch mode {
+            case "hide":
+                sendResponse(connection: connection, data: Self.hiddenPluginResponse(for: raw))
+                return
+            case "merge":
+                if let source = raw["_source"] as? String,
+                   let ppid = Self.pluginPpid(from: raw),
+                   let mainSessionId = appState.findSessionId(forSource: source, ppid: ppid) {
+                    var rewritten = raw
+                    rewritten["session_id"] = mainSessionId
+                    if let newData = try? JSONSerialization.data(withJSONObject: rewritten) {
+                        processedData = newData
+                    }
+                }
+                // No matching main session → fall through with original data
+                // (acts like "separate" in that case).
+            default:
+                break // "separate": no-op
+            }
+        }
+
+        guard let event = HookEvent(from: processedData) else {
             sendResponse(connection: connection, data: Data("{\"error\":\"parse_failed\"}".utf8))
             return
         }
