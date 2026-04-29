@@ -338,13 +338,10 @@ if let cmuxWorkspace = env["CMUX_WORKSPACE_ID"], !cmuxWorkspace.isEmpty {
 if let source = sourceTag {
     json["_source"] = source
 }
-// Mark events that arrived via a plugin proxy (no explicit --source but
-// ancestry inferred a real source — e.g. the omo OpenCode plugin firing
-// Claude hooks) so the host app can route them per pluginSessionMode.
-// See issue #123.
-if sourceTag == nil && effectiveSource != nil {
-    json["_via_plugin"] = true
-}
+// Plugin proxy detection (#123) is upstream-only — relies on source
+// inference (PR #95) that this fork doesn't carry. Without it the
+// pluginSessionMode setting still exists but no event is ever flagged
+// _via_plugin, so the host app keeps the "separate" behavior.
 
 // Parent PID — the CLI process that spawned this hook (works for any CLI)
 json["_ppid"] = getppid()

@@ -7,6 +7,12 @@ private let log = Logger(subsystem: "com.codeisland", category: "HookServer")
 
 @MainActor
 class HookServer {
+    enum RouteKind: Equatable {
+        case permission
+        case question
+        case event
+    }
+
     private let appState: AppState
     nonisolated static var socketPath: String { SocketPath.path }
     private var listener: NWListener?
