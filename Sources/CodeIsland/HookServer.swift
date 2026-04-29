@@ -216,13 +216,20 @@ class HookServer {
         return .event
     }
 
+    private static let pluginMarkerBytes = Data("_via_plugin".utf8)
+
     private func processRequest(data: Data, connection: NWConnection) {
         // Plugin session mode pre-filter (#123): events that arrived through a
         // plugin proxy (bridge marks them with `_via_plugin`) can be merged
         // into the matching main session, hidden, or kept separate per the
         // user's setting. "separate" preserves prior behavior.
+        //
+        // Cheap byte probe first — most events don't carry `_via_plugin`,
+        // and JSONSerialization on every PostToolUse on the main thread is
+        // not free.
         var processedData = data
-        if let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        if data.range(of: Self.pluginMarkerBytes) != nil,
+           let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            (raw["_via_plugin"] as? Bool) == true {
             let mode = UserDefaults.standard.string(forKey: SettingsKey.pluginSessionMode)
                 ?? SettingsDefaults.pluginSessionMode

@@ -2181,9 +2181,13 @@ private struct SessionCard: View {
                             HStack(spacing: 1) {
                                 ForEach(row, id: \.agentId) { sub in
                                     let typeLabel = sub.agentType.isEmpty ? "Subagent" : sub.agentType
-                                    let tooltip = (sub.currentTool?.isEmpty == false)
-                                        ? "\(typeLabel) — \(sub.currentTool!)"
-                                        : typeLabel
+                                    let tool = sub.currentTool.flatMap { $0.isEmpty ? nil : $0 }
+                                    let desc = sub.toolDescription.flatMap { $0.isEmpty ? nil : $0 }
+                                    let detail: String? = {
+                                        if let tool, let desc { return "\(tool) \(desc)" }
+                                        return tool
+                                    }()
+                                    let tooltip = detail.map { "\(typeLabel) — \($0)" } ?? typeLabel
                                     MiniAgentIcon(active: sub.status != .idle, size: 8)
                                         .help(tooltip)
                                 }

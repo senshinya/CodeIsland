@@ -7,6 +7,15 @@ import Foundation
 /// Drains stdout on a background queue so a full pipe buffer cannot wedge the
 /// child between writes and our wait().
 enum ProcessRunner {
+    /// Reference cell for the pipe drain so the closure and the calling thread
+    /// share storage cleanly. Synchronization is provided by the `drained`
+    /// semaphore (signal happens-before wait), so `@unchecked Sendable` is
+    /// load-bearing — Swift 6 strict-concurrency would otherwise flag the
+    /// captured-var write.
+    private final class DataBox: @unchecked Sendable {
+        var data = Data()
+    }
+
     static func run(
         path: String,
         args: [String],
@@ -30,10 +39,10 @@ enum ProcessRunner {
 
         do { try proc.run() } catch { return nil }
 
-        var data = Data()
+        let box = DataBox()
         let drained = DispatchSemaphore(value: 0)
         DispatchQueue.global(qos: .userInitiated).async {
-            data = pipe.fileHandleForReading.readDataToEndOfFile()
+            box.data = pipe.fileHandleForReading.readDataToEndOfFile()
             drained.signal()
         }
 
@@ -47,6 +56,6 @@ enum ProcessRunner {
             return nil
         }
         _ = drained.wait(timeout: .now() + 1)
-        return proc.terminationStatus == 0 ? data : nil
+        return proc.terminationStatus == 0 ? box.data : nil
     }
 }
