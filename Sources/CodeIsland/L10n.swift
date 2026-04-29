@@ -66,6 +66,8 @@ final class L10n: ObservableObject {
         "collapse_on_mouse_leave_desc": "Collapse expanded panel back to notch when mouse moves away",
         "auto_collapse_after_session_jump": "Auto-collapse after session jump",
         "auto_collapse_after_session_jump_desc": "Collapse panel after clicking a session and successfully switching to its terminal/client",
+        "auto_expand_on_completion": "Auto-Expand Panel on Agent Completion",
+        "auto_expand_on_completion_desc": "Briefly expand the panel when an agent or subagent finishes; turn off to keep CodeIsland in its compact state",
         "haptic_on_hover": "Haptic Feedback on Hover",
         "haptic_on_hover_desc": "Trigger trackpad haptic feedback when hovering over the notch",
         "haptic_light": "Light",
@@ -347,6 +349,8 @@ final class L10n: ObservableObject {
         "collapse_on_mouse_leave_desc": "鼠标移出展开的面板后自动收回到刘海状态",
         "auto_collapse_after_session_jump": "点击跳转会话后自动收起面板",
         "auto_collapse_after_session_jump_desc": "点击会话并成功切换到对应终端/客户端后自动收起面板",
+        "auto_expand_on_completion": "Agent 完成时自动展开面板",
+        "auto_expand_on_completion_desc": "Agent 或子 Agent 完成时短暂展开面板；关闭后 CodeIsland 始终保持紧凑状态",
         "haptic_on_hover": "悬停触控板震动",
         "haptic_on_hover_desc": "鼠标悬停在刘海上时触发触控板震动反馈",
         "haptic_light": "轻",
@@ -591,5 +595,6 @@ final class L10n: ObservableObject {
         "chat_new_messages_count": "%d 条新消息",
         "chat_scroll_to_bottom": "回到底部",
         "chat_turn_complete": "回合结束",
+
     ]
 }

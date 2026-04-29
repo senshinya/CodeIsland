@@ -608,6 +608,11 @@ final class AppState {
     }
 
     private func enqueueCompletion(_ sessionId: String) {
+        // Behavior setting (#146): respect "Auto-expand on agent completion".
+        // When disabled the panel stays compact — status indicators still
+        // update, but no completion card pops down.
+        guard UserDefaults.standard.bool(forKey: SettingsKey.autoExpandOnCompletion) else { return }
+
         // User is already viewing this session's chat — surface an inline hint
         // (rendered by SessionChatView) instead of routing through the queue.
         if case .chatHistory(let sid) = surface, sid == sessionId {
@@ -616,6 +621,7 @@ final class AppState {
             }
             return
         }
+
         // Don't queue duplicates
         if completionQueue.contains(sessionId) || justCompletedSessionId == sessionId { return }
 
