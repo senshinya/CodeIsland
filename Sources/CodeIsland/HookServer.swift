@@ -252,6 +252,16 @@ class HookServer {
             return
         }
 
+        // Diagnostics ring buffer (#103): record the post-merge view of the
+        // event so the export reflects what was actually dispatched.
+        appState.recordHookEvent(
+            source: event.rawJSON["_source"] as? String,
+            sessionId: event.sessionId,
+            eventName: event.eventName,
+            toolName: event.toolName,
+            viaPlugin: (event.rawJSON["_via_plugin"] as? Bool) == true
+        )
+
         if let rawSource = event.rawJSON["_source"] as? String,
            SessionSnapshot.normalizedSupportedSource(rawSource) == nil {
             sendResponse(connection: connection, data: Data("{}".utf8))
