@@ -211,6 +211,12 @@ struct TerminalActivator {
         // The AppleScript's `focus t; activate` below will activate after focusing
         // the correct terminal window.
 
+        // The remaining work (tmux key resolution + AppleScript construction +
+        // osascript dispatch) is the last subprocess-bound path that wasn't
+        // already off-main — match the rest of the activator and run it on a
+        // userInitiated background queue so a stuck `tmux display-message`
+        // can't freeze the UI. See #139.
+        DispatchQueue.global(qos: .userInitiated).async {
         // Resolve tmux title prefix (most reliable for tmux sessions in Ghostty).
         // Example Ghostty title often contains: "<session>:<winIdx>:<winName> - ..."
         var tmuxKey = ""
@@ -407,6 +413,7 @@ struct TerminalActivator {
         // Use /usr/bin/osascript to run AppleScript out-of-process (tmuxcc uses the same approach).
         // This avoids relying on NSAppleScript execution inside the app process.
         runOsaScript(script)
+        } // end DispatchQueue.global async
     }
 
     // MARK: - iTerm2 (AppleScript: match by session ID, tty, or cwd)
