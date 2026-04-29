@@ -988,29 +988,12 @@ struct TerminalActivator {
         return paths.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    /// Run a process and return stdout. Returns nil on failure.
+    /// Run a process and return stdout. Returns nil on failure or timeout.
+    /// 10s cap on each call so a stuck osascript / tmux invocation can't
+    /// freeze the UI when activate() is dispatched on the main thread (#139).
     @discardableResult
     private static func runProcess(_ path: String, args: [String], env: [String: String]? = nil) -> Data? {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: path)
-        proc.arguments = args
-        if let env {
-            var merged = ProcessInfo.processInfo.environment
-            for (k, v) in env { merged[k] = v }
-            proc.environment = merged
-        }
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = FileHandle.nullDevice
-        do {
-            try proc.run()
-            // Read BEFORE wait to avoid deadlock (pipe buffer full blocks the process)
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            proc.waitUntilExit()
-            return proc.terminationStatus == 0 ? data : nil
-        } catch {
-            return nil
-        }
+        ProcessRunner.run(path: path, args: args, env: env, timeout: 10)
     }
 
     private static func tmuxProcessEnv(_ tmuxEnv: String?) -> [String: String]? {
