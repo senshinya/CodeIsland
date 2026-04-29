@@ -2180,7 +2180,12 @@ private struct SessionCard: View {
                         ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                             HStack(spacing: 1) {
                                 ForEach(row, id: \.agentId) { sub in
+                                    let typeLabel = sub.agentType.isEmpty ? "Subagent" : sub.agentType
+                                    let tooltip = (sub.currentTool?.isEmpty == false)
+                                        ? "\(typeLabel) — \(sub.currentTool!)"
+                                        : typeLabel
                                     MiniAgentIcon(active: sub.status != .idle, size: 8)
+                                        .help(tooltip)
                                 }
                             }
                         }
@@ -2205,6 +2210,9 @@ private struct SessionCard: View {
                     Spacer(minLength: 8)
 
                     HStack(spacing: 4) {
+                        if !session.subagents.isEmpty {
+                            SessionTag("+\(session.subagents.count) Sub", color: Color(red: 0.65, green: 0.55, blue: 0.95))
+                        }
                         if session.interrupted {
                             SessionTag("INT", color: Color(red: 1.0, green: 0.6, blue: 0.2))
                         }
