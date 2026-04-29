@@ -204,9 +204,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func checkAndRepairHooks() {
         guard Date().timeIntervalSince(lastHookCheck) > 60 else { return }
         lastHookCheck = Date()
-        let repaired = ConfigInstaller.verifyAndRepair()
-        if !repaired.isEmpty {
-            Self.log.info("Auto-repaired hooks for: \(repaired.joined(separator: ", "))")
+        // verifyAndRepair walks every enabled CLI and rewrites settings on
+        // disk — keep it off the main thread so the activation observer (fires
+        // on every app switch) can't stutter the UI. See #139.
+        Task.detached(priority: .background) {
+            let repaired = ConfigInstaller.verifyAndRepair()
+            if !repaired.isEmpty {
+                Self.log.info("Auto-repaired hooks for: \(repaired.joined(separator: ", "))")
+            }
         }
     }
 
