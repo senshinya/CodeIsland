@@ -223,40 +223,59 @@ class HookServer {
     }
 
     private static let pluginMarkerBytes = Data("_via_plugin".utf8)
+    /// Cheap byte probe to decide whether a payload may need Codex sub-agent
+    /// classification (#151). The bridge always emits `"_source":"codex"` as
+    /// a top-level field for Codex events.
+    private static let codexSourceMarkerBytes = Data("\"_source\":\"codex\"".utf8)
 
     private func processRequest(data: Data, connection: NWConnection) {
-        // Plugin session mode pre-filter (#123): events that arrived through a
-        // plugin proxy (bridge marks them with `_via_plugin`) can be merged
-        // into the matching main session, hidden, or kept separate per the
-        // user's setting. "separate" preserves prior behavior.
+        // Sub-session mode pre-filter: events that arrived through a plugin
+        // proxy (bridge marks them with `_via_plugin`, #123) or that come from
+        // a Codex native sub-agent (#151) can be merged into the matching
+        // main session, hidden, or kept separate per the user's setting.
+        // "separate" preserves prior behavior.
         //
-        // Cheap byte probe first — most events don't carry `_via_plugin`,
-        // and JSONSerialization on every PostToolUse on the main thread is
-        // not free.
+        // Cheap byte probes first — most events carry neither marker, and
+        // JSONSerialization on every PostToolUse on the main thread is not
+        // free. We only parse JSON when one of the probes hits.
         var processedData = data
-        if data.range(of: Self.pluginMarkerBytes) != nil,
-           let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           (raw["_via_plugin"] as? Bool) == true {
-            let mode = UserDefaults.standard.string(forKey: SettingsKey.pluginSessionMode)
-                ?? SettingsDefaults.pluginSessionMode
-            switch mode {
-            case "hide":
-                sendResponse(connection: connection, data: Self.hiddenPluginResponse(for: raw))
-                return
-            case "merge":
-                if let source = raw["_source"] as? String,
-                   let ppid = Self.pluginPpid(from: raw),
-                   let mainSessionId = appState.findSessionId(forSource: source, ppid: ppid) {
-                    var rewritten = raw
-                    rewritten["session_id"] = mainSessionId
-                    if let newData = try? JSONSerialization.data(withJSONObject: rewritten) {
-                        processedData = newData
+        let mayBePluginProxied = data.range(of: Self.pluginMarkerBytes) != nil
+        let mayBeCodexEvent = data.range(of: Self.codexSourceMarkerBytes) != nil
+
+        if mayBePluginProxied || mayBeCodexEvent,
+           let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let isViaPlugin = (raw["_via_plugin"] as? Bool) == true
+            let isCodexSubagent: Bool = {
+                guard !isViaPlugin else { return false }
+                guard (raw["_source"] as? String) == "codex" else { return false }
+                guard let sessionId = (raw["session_id"] as? String) ?? (raw["sessionId"] as? String),
+                      let ppid = Self.pluginPpid(from: raw) else { return false }
+                return appState.isCodexSubagentEvent(sessionId: sessionId, ppid: ppid)
+            }()
+
+            if isViaPlugin || isCodexSubagent {
+                let mode = UserDefaults.standard.string(forKey: SettingsKey.pluginSessionMode)
+                    ?? SettingsDefaults.pluginSessionMode
+                switch mode {
+                case "hide":
+                    sendResponse(connection: connection, data: Self.hiddenPluginResponse(for: raw))
+                    return
+                case "merge":
+                    if let source = raw["_source"] as? String,
+                       let ppid = Self.pluginPpid(from: raw),
+                       let mainSessionId = appState.findSessionId(forSource: source, ppid: ppid),
+                       mainSessionId != ((raw["session_id"] as? String) ?? (raw["sessionId"] as? String)) {
+                        var rewritten = raw
+                        rewritten["session_id"] = mainSessionId
+                        if let newData = try? JSONSerialization.data(withJSONObject: rewritten) {
+                            processedData = newData
+                        }
                     }
+                    // No matching main session → fall through with original data
+                    // (acts like "separate" in that case).
+                default:
+                    break // "separate": no-op
                 }
-                // No matching main session → fall through with original data
-                // (acts like "separate" in that case).
-            default:
-                break // "separate": no-op
             }
         }
 

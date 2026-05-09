@@ -1255,15 +1255,42 @@ final class AppState {
     /// plugin event's `_ppid` if the OS recycled that PID for an unrelated
     /// process. Live sessions update `lastActivity` on every event so the
     /// window is generous; stale ones get skipped. (#123 review)
+    ///
+    /// Returns the OLDEST matching session (by `startTime`), so that when a
+    /// Codex CLI hosts both a parent and one or more native sub-agent threads
+    /// — all sharing the same bridge `_ppid` — merge mode resolves to the
+    /// root session rather than another sub-agent. (#151)
     func findSessionId(forSource source: String, ppid: Int) -> String? {
         let normalized = SessionSnapshot.normalizedSupportedSource(source)
         let cutoff = Date().addingTimeInterval(-300)
-        return sessions.first(where: { _, snap in
+        return sessions.filter { _, snap in
             let snapSource = SessionSnapshot.normalizedSupportedSource(snap.source)
             return snapSource == normalized
                 && snap.cliPid == pid_t(ppid)
                 && snap.lastActivity >= cutoff
-        })?.key
+        }
+        .min(by: { $0.value.startTime < $1.value.startTime })?
+        .key
+    }
+
+    /// Best-effort detection for a Codex native sub-agent event (#151).
+    /// Codex 0.120+ spawns sub-agents as additional in-process sessions but
+    /// does not expose parent linkage in the hook payload. We infer it: when
+    /// another active Codex session shares the bridge `_ppid` (i.e. lives in
+    /// the same Codex CLI process) and was created earlier, this event is
+    /// from a sub-agent — the oldest session in the group is the root.
+    ///
+    /// Returns false for the root's own events so the panel still shows them.
+    func isCodexSubagentEvent(sessionId: String, ppid: Int) -> Bool {
+        let cutoff = Date().addingTimeInterval(-300)
+        let matching = sessions.filter { _, snap in
+            snap.source == "codex"
+                && snap.cliPid == pid_t(ppid)
+                && snap.lastActivity >= cutoff
+        }
+        guard !matching.isEmpty else { return false }
+        let rootId = matching.min(by: { $0.value.startTime < $1.value.startTime })?.key
+        return rootId != sessionId
     }
 
     func denyPermission() {
@@ -1327,8 +1354,9 @@ final class AppState {
         extractMetadata(into: &sessions, sessionId: sessionId, event: event)
         tryMonitorSession(sessionId)
 
+        let originalQuestions = event.toolInput?["questions"] as? [[String: Any]]
         var askItems: [AskUserQuestionItem] = []
-        if let questions = event.toolInput?["questions"] as? [[String: Any]] {
+        if let questions = originalQuestions {
             var usedAnswerKeys = Set<String>()
             askItems = questions.enumerated().compactMap { index, item in
                 let questionText = item["question"] as? String ?? "Question"
@@ -1378,12 +1406,18 @@ final class AppState {
         }
 
         guard !askItems.isEmpty else {
+            let updatedInput = askUserQuestionUpdatedInput(
+                event: event,
+                answers: [:],
+                answer: nil,
+                originalQuestions: originalQuestions
+            )
             let obj: [String: Any] = [
                 "hookSpecificOutput": [
                     "hookEventName": "PermissionRequest",
                     "decision": [
                         "behavior": "allow",
-                        "updatedInput": ["answers": [:] as [String: String]]
+                        "updatedInput": updatedInput
                     ] as [String: Any]
                 ] as [String: Any]
             ]
@@ -1434,14 +1468,18 @@ final class AppState {
         let responseData: Data
         if pending.isFromPermission {
             let answerKey = pending.question.header ?? "answer"
+            let updatedInput = askUserQuestionUpdatedInput(
+                event: pending.event,
+                answers: [answerKey: answer],
+                answer: answer,
+                originalQuestions: pending.event.toolInput?["questions"] as? [[String: Any]]
+            )
             let obj: [String: Any] = [
                 "hookSpecificOutput": [
                     "hookEventName": "PermissionRequest",
                     "decision": [
                         "behavior": "allow",
-                        "updatedInput": [
-                            "answers": [answerKey: answer]
-                        ]
+                        "updatedInput": updatedInput
                     ] as [String: Any]
                 ] as [String: Any]
             ]
@@ -1479,14 +1517,18 @@ final class AppState {
                 let answerKey = pending.question.header ?? "answer"
                 answersDict[answerKey] = answers.first?.answer ?? ""
             }
+            let updatedInput = askUserQuestionUpdatedInput(
+                event: pending.event,
+                answers: answersDict,
+                answer: answers.first?.answer,
+                originalQuestions: pending.event.toolInput?["questions"] as? [[String: Any]]
+            )
             let obj: [String: Any] = [
                 "hookSpecificOutput": [
                     "hookEventName": "PermissionRequest",
                     "decision": [
                         "behavior": "allow",
-                        "updatedInput": [
-                            "answers": answersDict
-                        ]
+                        "updatedInput": updatedInput
                     ] as [String: Any]
                 ] as [String: Any]
             ]
@@ -1506,6 +1548,23 @@ final class AppState {
 
         showNextPending()
         refreshDerivedState()
+    }
+
+    private func askUserQuestionUpdatedInput(
+        event: HookEvent,
+        answers: [String: String],
+        answer: String?,
+        originalQuestions: [[String: Any]]?
+    ) -> [String: Any] {
+        var updatedInput = event.toolInput ?? [:]
+        if let originalQuestions {
+            updatedInput["questions"] = originalQuestions
+        }
+        updatedInput["answers"] = answers
+        if let answer {
+            updatedInput["answer"] = answer
+        }
+        return updatedInput
     }
 
     /// Dismiss the current question without sending any decision/answer to the CLI.

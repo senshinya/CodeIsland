@@ -35,6 +35,10 @@ enum SettingsKey {
     static let autoCollapseAfterSessionJump = "autoCollapseAfterSessionJump"
     static let autoExpandOnCompletion = "autoExpandOnCompletion"
     static let pluginSessionMode = "pluginSessionMode"  // "separate" | "merge" | "hide"
+    /// When true, skip installing CodeIsland's PermissionRequest hook for Codex
+    /// so Codex's native auto-review (LLM-based auto-approval) and approval UI
+    /// take over. Off by default to preserve the existing approval panel UX. (#165)
+    static let codexUseNativeApproval = "codexUseNativeApproval"
     static let hapticOnHover = "hapticOnHover"
     static let hapticIntensity = "hapticIntensity"      // 1=light, 2=medium, 3=strong
     static let sessionTimeout = "sessionTimeout"
@@ -144,6 +148,7 @@ struct SettingsDefaults {
     static let autoCollapseAfterSessionJump = false
     static let autoExpandOnCompletion = true
     static let pluginSessionMode = "separate"
+    static let codexUseNativeApproval = false
     static let hapticOnHover = false
     static let hapticIntensity = 1          // 1=light
     static let sessionTimeout = 30
@@ -238,6 +243,7 @@ class SettingsManager {
             SettingsKey.autoCollapseAfterSessionJump: SettingsDefaults.autoCollapseAfterSessionJump,
             SettingsKey.autoExpandOnCompletion: SettingsDefaults.autoExpandOnCompletion,
             SettingsKey.pluginSessionMode: SettingsDefaults.pluginSessionMode,
+            SettingsKey.codexUseNativeApproval: SettingsDefaults.codexUseNativeApproval,
             SettingsKey.hapticOnHover: SettingsDefaults.hapticOnHover,
             SettingsKey.hapticIntensity: SettingsDefaults.hapticIntensity,
             SettingsKey.sessionTimeout: SettingsDefaults.sessionTimeout,

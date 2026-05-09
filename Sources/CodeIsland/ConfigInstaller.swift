@@ -176,7 +176,7 @@ struct ConfigInstaller {
             }
         }
 
-        // Codex requires codex_hooks = true in config.toml
+        // Codex requires the hooks feature flag in config.toml
         if isEnabled(source: "codex"),
            fm.fileExists(atPath: codexHome()) {
             enableCodexHooksConfig(fm: fm)
@@ -275,7 +275,7 @@ struct ConfigInstaller {
                 }
             }
         }
-        // Codex config.toml: ensure codex_hooks = true
+        // Codex config.toml: ensure the hooks feature flag is set
         if isEnabled(source: "codex"),
            fm.fileExists(atPath: codexHome()) {
             enableCodexHooksConfig(fm: fm)
@@ -453,19 +453,29 @@ struct ConfigInstaller {
         return true // equal
     }
 
-    /// Filter events based on installed CLI version
+    /// Filter events based on installed CLI version and user-facing toggles.
     static func compatibleEvents(for cli: CLIConfig) -> [(String, Int, Bool)] {
-        guard !cli.versionedEvents.isEmpty else { return cli.events }
+        var events = cli.events
 
-        // Only Claude Code needs version checking for now
-        guard cli.source == "claude" else { return cli.events }
-        let version = detectClaudeVersion()
-
-        return cli.events.filter { (event, _, _) in
-            guard let minVer = cli.versionedEvents[event] else { return true }
-            guard let version else { return false } // can't detect version → skip risky events
-            return versionAtLeast(version, minVer)
+        // Codex auto-review preservation (#165): when the user opts to let Codex
+        // handle approvals natively, skip our PermissionRequest hook so Codex's
+        // built-in auto-review and approval UI flow run unimpeded.
+        if cli.source == "codex"
+            && UserDefaults.standard.bool(forKey: SettingsKey.codexUseNativeApproval) {
+            events = events.filter { $0.0 != "PermissionRequest" }
         }
+
+        // Version-gated events (currently Claude-only)
+        if !cli.versionedEvents.isEmpty, cli.source == "claude" {
+            let version = detectClaudeVersion()
+            events = events.filter { (event, _, _) in
+                guard let minVer = cli.versionedEvents[event] else { return true }
+                guard let version else { return false } // can't detect version → skip risky events
+                return versionAtLeast(version, minVer)
+            }
+        }
+
+        return events
     }
 
     // MARK: - Claude Code (special: uses hook script)
@@ -530,7 +540,25 @@ struct ConfigInstaller {
         let quotedBridge = bridgeCommand.contains(" ") ? "\"\(bridgeCommand)\"" : bridgeCommand
         let baseCommand = "\(quotedBridge) --source \(cli.source)"
 
-        for (event, timeout, _) in cli.events {
+        let events = compatibleEvents(for: cli)
+        let supported = Set(events.map { $0.0 })
+
+        // Remove our managed entries from any event that's no longer supported by
+        // the current settings (e.g. Codex PermissionRequest when the user opts
+        // into native auto-review). Without this, toggling the setting would
+        // leave behind a stale hook entry. (#165)
+        for (event, _, _) in cli.events where !supported.contains(event) {
+            if var entries = hooks[event] as? [[String: Any]] {
+                entries.removeAll { containsOurHook($0) }
+                if entries.isEmpty {
+                    hooks.removeValue(forKey: event)
+                } else {
+                    hooks[event] = entries
+                }
+            }
+        }
+
+        for (event, timeout, _) in events {
             var eventEntries = hooks[event] as? [[String: Any]] ?? []
             // Remove old hooks before adding fresh ones (ensures reinstall works)
             eventEntries.removeAll { containsOurHook($0) }
@@ -554,8 +582,14 @@ struct ConfigInstaller {
 
     // MARK: - Codex config.toml
 
-    /// Ensure codex_hooks = true under [features] in $CODEX_HOME/config.toml
+    /// Ensure Codex's hooks feature flag is set in $CODEX_HOME/config.toml
     /// (or ~/.codex/config.toml when unset) so Codex actually fires hook events.
+    ///
+    /// Codex 26.506.21252+ renamed the flag from `codex_hooks` to `hooks` under
+    /// `[features]` (issues #162, #167). To stay compatible with both old and
+    /// new Codex versions during the transition, we ensure `hooks = true` is
+    /// present, and migrate any `codex_hooks = false` to `codex_hooks = true`
+    /// without removing the legacy key (TOML allows extra unknown keys).
     @discardableResult
     private static func enableCodexHooksConfig(fm: FileManager) -> Bool {
         let configPath = codexHome() + "/config.toml"
@@ -563,35 +597,81 @@ struct ConfigInstaller {
         if fm.fileExists(atPath: configPath) {
             contents = (try? String(contentsOfFile: configPath, encoding: .utf8)) ?? ""
         }
+        guard let updated = applyCodexHooksFlag(to: contents) else { return true }
+        return fm.createFile(atPath: configPath, contents: updated.data(using: .utf8))
+    }
 
-        // Already set to true (non-commented) — don't touch
-        if contents.range(of: #"(?m)^\s*codex_hooks\s*=\s*true"#, options: .regularExpression) != nil {
-            return true
-        }
+    /// Pure TOML transform behind `enableCodexHooksConfig`. Returns the new
+    /// contents when something changed, or nil when the input already has the
+    /// correct shape (so the caller can skip touching disk).
+    static func applyCodexHooksFlag(to input: String) -> String? {
+        var contents = input
+        var changed = false
 
-        // Set to false (non-commented) — flip it to true in place
+        // Migrate any explicit false -> true for either flag name
         if contents.range(of: #"(?m)^\s*codex_hooks\s*=\s*false"#, options: .regularExpression) != nil {
             contents = contents.replacingOccurrences(
                 of: #"(?m)^\s*codex_hooks\s*=\s*false"#,
                 with: "codex_hooks = true",
                 options: .regularExpression
             )
-            return fm.createFile(atPath: configPath, contents: contents.data(using: .utf8))
+            changed = true
+        }
+        if contents.range(of: #"(?m)^\s*hooks\s*=\s*false"#, options: .regularExpression) != nil {
+            contents = contents.replacingOccurrences(
+                of: #"(?m)^\s*hooks\s*=\s*false"#,
+                with: "hooks = true",
+                options: .regularExpression
+            )
+            changed = true
         }
 
-        // Not present — insert into [features] section or create it
+        // New Codex (26.506.21252+) requires `[features].hooks = true`. We need
+        // to check for the flag *within* the [features] block — a top-level or
+        // foreign-section `hooks = true` line must not be accepted as a false
+        // positive, otherwise we'd never insert the real flag.
         var lines = contents.components(separatedBy: "\n")
-        if let featIdx = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "[features]" }) {
-            // Insert after [features] line
-            lines.insert("codex_hooks = true", at: featIdx + 1)
-        } else {
-            // No [features] section — append one
-            if !(lines.last ?? "").isEmpty { lines.append("") }
-            lines.append("[features]")
-            lines.append("codex_hooks = true")
+        let featBlock = featuresBlockRange(in: lines)
+        let hasNewFlagInFeatures = featBlock.map { range in
+            lines[range].contains { line in
+                line.trimmingCharacters(in: .whitespaces)
+                    .range(of: #"^hooks\s*=\s*true"#, options: .regularExpression) != nil
+            }
+        } ?? false
+
+        if !hasNewFlagInFeatures {
+            if let range = featBlock {
+                lines.insert("hooks = true", at: range.lowerBound)
+            } else {
+                if !(lines.last ?? "").isEmpty { lines.append("") }
+                lines.append("[features]")
+                lines.append("hooks = true")
+            }
+            contents = lines.joined(separator: "\n")
+            changed = true
         }
-        let result = lines.joined(separator: "\n")
-        return fm.createFile(atPath: configPath, contents: result.data(using: .utf8))
+
+        return changed ? contents : nil
+    }
+
+    /// Range of line indices belonging to the body of the `[features]` block
+    /// (exclusive of the section header line itself, exclusive of the next
+    /// section header). Returns nil when no `[features]` section exists.
+    private static func featuresBlockRange(in lines: [String]) -> Range<Int>? {
+        guard let header = lines.firstIndex(where: {
+            $0.trimmingCharacters(in: .whitespaces) == "[features]"
+        }) else { return nil }
+        var end = lines.count
+        if header + 1 < lines.count {
+            for i in (header + 1)..<lines.count {
+                let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+                    end = i
+                    break
+                }
+            }
+        }
+        return (header + 1)..<end
     }
 
     // MARK: - Uninstall (generic)

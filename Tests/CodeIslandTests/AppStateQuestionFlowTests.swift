@@ -4,14 +4,15 @@ import CodeIslandCore
 
 @MainActor
 final class AppStateQuestionFlowTests: XCTestCase {
-    func testAskUserQuestionMultiQuestionReturnsAllAnswers() async throws {
+    func testAskUserQuestionMultiQuestionReturnsQuestionsAndAnswers() async throws {
         let appState = AppState()
+        let questions = [
+            question(header: "mode", text: "How should I work?", options: ["execute", "plan"]),
+            question(header: "style", text: "How should I reply?", options: ["brief", "balanced"]),
+        ]
         let event = try makeAskUserQuestionEvent(
             sessionId: "s-1",
-            questions: [
-                question(header: "mode", text: "How should I work?", options: ["execute", "plan"]),
-                question(header: "style", text: "How should I reply?", options: ["brief", "balanced"]),
-            ]
+            questions: questions
         )
 
         let responseTask = Task<Data, Never> {
@@ -29,6 +30,12 @@ final class AppStateQuestionFlowTests: XCTestCase {
         ])
 
         let responseData = await responseTask.value
+        let updatedInput = try extractUpdatedInput(from: responseData)
+        let returnedQuestions = try XCTUnwrap(updatedInput["questions"] as? [[String: Any]])
+        XCTAssertEqual(returnedQuestions.count, questions.count)
+        XCTAssertEqual(returnedQuestions[0]["question"] as? String, questions[0]["question"] as? String)
+        XCTAssertEqual(returnedQuestions[1]["question"] as? String, questions[1]["question"] as? String)
+
         let answers = try extractAnswers(from: responseData)
         XCTAssertEqual(answers["mode"] as? String, "plan")
         XCTAssertEqual(answers["style"] as? String, "balanced")
@@ -213,11 +220,15 @@ final class AppStateQuestionFlowTests: XCTestCase {
         return result
     }
 
-    private func extractAnswers(from responseData: Data) throws -> [String: Any] {
+    private func extractUpdatedInput(from responseData: Data) throws -> [String: Any] {
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: responseData) as? [String: Any])
         let hookSpecificOutput = try XCTUnwrap(json["hookSpecificOutput"] as? [String: Any])
         let decision = try XCTUnwrap(hookSpecificOutput["decision"] as? [String: Any])
-        let updatedInput = try XCTUnwrap(decision["updatedInput"] as? [String: Any])
+        return try XCTUnwrap(decision["updatedInput"] as? [String: Any])
+    }
+
+    private func extractAnswers(from responseData: Data) throws -> [String: Any] {
+        let updatedInput = try extractUpdatedInput(from: responseData)
         return try XCTUnwrap(updatedInput["answers"] as? [String: Any])
     }
 

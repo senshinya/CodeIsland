@@ -187,6 +187,7 @@ private struct BehaviorPage: View {
     @AppStorage(SettingsKey.autoCollapseAfterSessionJump) private var autoCollapseAfterSessionJump = SettingsDefaults.autoCollapseAfterSessionJump
     @AppStorage(SettingsKey.autoExpandOnCompletion) private var autoExpandOnCompletion = SettingsDefaults.autoExpandOnCompletion
     @AppStorage(SettingsKey.pluginSessionMode) private var pluginSessionMode = SettingsDefaults.pluginSessionMode
+    @AppStorage(SettingsKey.codexUseNativeApproval) private var codexUseNativeApproval = SettingsDefaults.codexUseNativeApproval
     @AppStorage(SettingsKey.hapticOnHover) private var hapticOnHover = SettingsDefaults.hapticOnHover
     @AppStorage(SettingsKey.hapticIntensity) private var hapticIntensity = SettingsDefaults.hapticIntensity
     @AppStorage(SettingsKey.sessionTimeout) private var sessionTimeout = SettingsDefaults.sessionTimeout
@@ -303,6 +304,21 @@ private struct BehaviorPage: View {
                 } label: {
                     Text(l10n["plugin_session_mode"])
                     Text(l10n["plugin_session_mode_desc"])
+                }
+                Toggle(isOn: $codexUseNativeApproval) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(l10n["codex_native_approval"])
+                        Text(l10n["codex_native_approval_desc"])
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .onChange(of: codexUseNativeApproval) {
+                    // Re-install Codex hooks so the change is reflected in
+                    // ~/.codex/hooks.json without requiring a manual repair. (#165)
+                    DispatchQueue.global(qos: .utility).async {
+                        _ = ConfigInstaller.setEnabled(source: "codex", enabled: ConfigInstaller.isEnabled(source: "codex"))
+                    }
                 }
             }
 

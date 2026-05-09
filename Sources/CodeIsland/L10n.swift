@@ -111,11 +111,13 @@ final class L10n: ObservableObject {
         "10_seconds": "10 Seconds",
         "tool_history_limit": "Tool History Limit",
         "tool_history_limit_desc": "Max number of recent tool calls shown per session",
-        "plugin_session_mode": "Plugin Sub-Sessions",
-        "plugin_session_mode_desc": "How to handle hook events fired by plugins running inside another agent (e.g. omo inside OpenCode)",
+        "plugin_session_mode": "Sub-Sessions",
+        "plugin_session_mode_desc": "How to display sessions spawned by another agent — plugin proxies (e.g. omo inside OpenCode) and Codex native sub-agents",
         "plugin_session_mode_separate": "Show separately",
         "plugin_session_mode_merge": "Merge into main",
         "plugin_session_mode_hide": "Hide",
+        "codex_native_approval": "Let Codex handle approvals",
+        "codex_native_approval_desc": "Skip CodeIsland's approval panel for Codex so its native auto-review (LLM-based auto-approval) and prompt UI handle permission requests. Re-runs hook install on change.",
 
         // Auto-approve tools
         "auto_approve_tools": "Auto-approve Tools",
@@ -399,11 +401,13 @@ final class L10n: ObservableObject {
         "10_seconds": "10 秒",
         "tool_history_limit": "工具历史上限",
         "tool_history_limit_desc": "每个会话显示的最近工具调用数量上限",
-        "plugin_session_mode": "插件子会话",
-        "plugin_session_mode_desc": "处理在其他 agent 内运行的插件触发的事件（例如 OpenCode 中的 omo 插件）",
+        "plugin_session_mode": "子会话",
+        "plugin_session_mode_desc": "处理由其他 agent 派生出的会话——包括插件代理（例如 OpenCode 中的 omo 插件）和 Codex 原生子 agent",
         "plugin_session_mode_separate": "独立显示",
         "plugin_session_mode_merge": "合并到主会话",
         "plugin_session_mode_hide": "隐藏",
+        "codex_native_approval": "由 Codex 自行处理审批",
+        "codex_native_approval_desc": "为 Codex 跳过 CodeIsland 的审批面板，让其原生的 Auto-Review（大模型自动批准）和提示界面处理权限请求。切换后会自动重新安装钩子。",
 
         // Auto-approve tools
         "auto_approve_tools": "自动批准工具",

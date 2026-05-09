@@ -240,6 +240,87 @@ final class ConfigInstallerTests: XCTestCase {
         XCTAssertEqual(roundtrip, original, "Existing file must be left byte-for-byte untouched")
     }
 
+    // MARK: - Codex hooks feature flag (#162, #167)
+
+    func testApplyCodexHooksFlagOnEmptyConfigCreatesFeaturesSection() throws {
+        let updated = try XCTUnwrap(ConfigInstaller.applyCodexHooksFlag(to: ""))
+        XCTAssertTrue(updated.contains("[features]"))
+        XCTAssertTrue(updated.contains("hooks = true"))
+    }
+
+    func testApplyCodexHooksFlagInsertsNewKeyWhenLegacyKeyIsPresent() throws {
+        // Existing user with legacy `codex_hooks = true` must end up with both
+        // keys so old and new Codex versions both pick up the flag.
+        let input = """
+            personality = "pragmatic"
+
+            [features]
+            codex_hooks = true
+            """
+        let updated = try XCTUnwrap(ConfigInstaller.applyCodexHooksFlag(to: input))
+        XCTAssertTrue(updated.contains("hooks = true"))
+        XCTAssertTrue(updated.contains("codex_hooks = true"))
+    }
+
+    func testApplyCodexHooksFlagSkipsWhenNewKeyAlreadyInFeatures() {
+        let input = """
+            [features]
+            hooks = true
+            """
+        XCTAssertNil(ConfigInstaller.applyCodexHooksFlag(to: input),
+                     "No-op expected when [features].hooks = true is already set")
+    }
+
+    func testApplyCodexHooksFlagIgnoresHooksKeyOutsideFeaturesSection() throws {
+        // A `hooks = true` line in another section (or top-level) must not be
+        // mistaken for the [features] flag — otherwise we'd never insert the
+        // real one and Codex hooks would never fire.
+        let input = """
+            hooks = true
+
+            [some_other_section]
+            hooks = true
+            """
+        let updated = try XCTUnwrap(ConfigInstaller.applyCodexHooksFlag(to: input))
+        XCTAssertTrue(updated.contains("[features]"))
+        // Should now have a [features].hooks = true in addition to the others
+        let featuresIdx = try XCTUnwrap(updated.range(of: "[features]"))
+        let suffix = updated[featuresIdx.upperBound...]
+        XCTAssertTrue(suffix.contains("hooks = true"),
+                      "[features].hooks = true must be inserted under the [features] header")
+    }
+
+    func testApplyCodexHooksFlagFlipsBothFalseFlags() throws {
+        let input = """
+            [features]
+            codex_hooks = false
+            hooks = false
+            """
+        let updated = try XCTUnwrap(ConfigInstaller.applyCodexHooksFlag(to: input))
+        XCTAssertTrue(updated.contains("codex_hooks = true"))
+        XCTAssertTrue(updated.contains("hooks = true"))
+        XCTAssertFalse(updated.contains("= false"))
+    }
+
+    // MARK: - Codex auto-review preservation (#165)
+
+    func testCompatibleEventsForCodexFiltersPermissionRequestWhenUsingNativeApproval() throws {
+        let codex = try XCTUnwrap(ConfigInstaller.allCLIs.first(where: { $0.source == "codex" }))
+        let key = SettingsKey.codexUseNativeApproval
+        let original = UserDefaults.standard.bool(forKey: key)
+        defer { UserDefaults.standard.set(original, forKey: key) }
+
+        UserDefaults.standard.set(true, forKey: key)
+        let filtered = ConfigInstaller.compatibleEvents(for: codex).map(\.0)
+        XCTAssertFalse(filtered.contains("PermissionRequest"),
+                       "PermissionRequest must be skipped when Codex native approval is on")
+
+        UserDefaults.standard.set(false, forKey: key)
+        let unfiltered = ConfigInstaller.compatibleEvents(for: codex).map(\.0)
+        XCTAssertTrue(unfiltered.contains("PermissionRequest"),
+                      "PermissionRequest must be installed by default")
+    }
+
     func testWriteJSONPreservingUntouchedUnescapesSlashesAndKeepsTrailingNewline() throws {
         let tmpDir = NSTemporaryDirectory() + "codeisland-write-\(UUID().uuidString)"
         let fm = FileManager.default
