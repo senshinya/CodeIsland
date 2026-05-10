@@ -1376,8 +1376,12 @@ final class AppState {
                     descriptions: optionDescs,
                     header: header
                 )
-                let trimmedHeader = header?.trimmingCharacters(in: .whitespacesAndNewlines)
-                let baseKey = (trimmedHeader?.isEmpty == false ? trimmedHeader : nil) ?? "answer_\(index + 1)"
+                // Claude Code's AskUserQuestion tool result generator looks up
+                // answers by the full `question` string (`answers[question.question]`),
+                // so the map must be keyed that way; the chip-style `header` is
+                // for display only.
+                let trimmedQuestion = questionText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let baseKey = trimmedQuestion.isEmpty ? "answer_\(index + 1)" : trimmedQuestion
                 var answerKey = baseKey
                 if usedAnswerKeys.contains(answerKey) {
                     var suffix = 2
@@ -1401,7 +1405,9 @@ final class AppState {
             }
             if !questionText.isEmpty {
                 let payload = QuestionPayload(question: questionText, options: options)
-                askItems = [AskUserQuestionItem(payload: payload, answerKey: "answer", multiSelect: false)]
+                let trimmedQuestion = questionText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let fallbackKey = trimmedQuestion.isEmpty ? "answer" : trimmedQuestion
+                askItems = [AskUserQuestionItem(payload: payload, answerKey: fallbackKey, multiSelect: false)]
             }
         }
 
@@ -1467,7 +1473,8 @@ final class AppState {
         let pending = questionQueue.removeFirst()
         let responseData: Data
         if pending.isFromPermission {
-            let answerKey = pending.question.header ?? "answer"
+            let trimmedQuestion = pending.question.question.trimmingCharacters(in: .whitespacesAndNewlines)
+            let answerKey = trimmedQuestion.isEmpty ? "answer" : trimmedQuestion
             let updatedInput = askUserQuestionUpdatedInput(
                 event: pending.event,
                 answers: [answerKey: answer],
@@ -1514,7 +1521,8 @@ final class AppState {
                     }
                 }
             } else {
-                let answerKey = pending.question.header ?? "answer"
+                let trimmedQuestion = pending.question.question.trimmingCharacters(in: .whitespacesAndNewlines)
+                let answerKey = trimmedQuestion.isEmpty ? "answer" : trimmedQuestion
                 answersDict[answerKey] = answers.first?.answer ?? ""
             }
             let updatedInput = askUserQuestionUpdatedInput(

@@ -37,8 +37,8 @@ final class AppStateQuestionFlowTests: XCTestCase {
         XCTAssertEqual(returnedQuestions[1]["question"] as? String, questions[1]["question"] as? String)
 
         let answers = try extractAnswers(from: responseData)
-        XCTAssertEqual(answers["mode"] as? String, "plan")
-        XCTAssertEqual(answers["style"] as? String, "balanced")
+        XCTAssertEqual(answers["How should I work?"] as? String, "plan")
+        XCTAssertEqual(answers["How should I reply?"] as? String, "balanced")
     }
 
     func testAskUserQuestionSingleQuestionWorks() async throws {
@@ -63,7 +63,7 @@ final class AppStateQuestionFlowTests: XCTestCase {
 
         let responseData = await responseTask.value
         let answers = try extractAnswers(from: responseData)
-        XCTAssertEqual(answers["language"] as? String, "Chinese")
+        XCTAssertEqual(answers["Reply in which language?"] as? String, "Chinese")
     }
 
     func testDismissAskUserQuestionReturnsEmptyResponse() async throws {
@@ -117,13 +117,13 @@ final class AppStateQuestionFlowTests: XCTestCase {
         XCTAssertEqual(appState.questionQueue.count, 0)
     }
 
-    func testDuplicateHeadersGetDedupedKeys() async throws {
+    func testDuplicateQuestionTextsGetDedupedKeys() async throws {
         let appState = AppState()
         let event = try makeAskUserQuestionEvent(
             sessionId: "s-dup",
             questions: [
-                question(header: "preference", text: "First question", options: ["A", "B"]),
-                question(header: "preference", text: "Second question", options: ["C", "D"]),
+                question(header: "first", text: "Same question", options: ["A", "B"]),
+                question(header: "second", text: "Same question", options: ["C", "D"]),
             ]
         )
 
@@ -135,23 +135,23 @@ final class AppStateQuestionFlowTests: XCTestCase {
 
         await Task.yield()
         appState.answerQuestionMulti([
-            (question: "First question", answer: "A"),
-            (question: "Second question", answer: "D"),
+            (question: "Same question", answer: "A"),
+            (question: "Same question", answer: "D"),
         ])
 
         let responseData = await responseTask.value
         let answers = try extractAnswers(from: responseData)
-        XCTAssertEqual(answers["preference"] as? String, "A")
-        XCTAssertEqual(answers["preference_2"] as? String, "D")
+        XCTAssertEqual(answers["Same question"] as? String, "A")
+        XCTAssertEqual(answers["Same question_2"] as? String, "D")
     }
 
-    func testMissingHeaderUsesIndexedFallbackKeys() async throws {
+    func testMissingQuestionTextUsesIndexedFallbackKeys() async throws {
         let appState = AppState()
         let event = try makeAskUserQuestionEvent(
-            sessionId: "s-nohdr",
+            sessionId: "s-noq",
             questions: [
-                question(header: nil, text: "No header", options: ["A", "B"]),
-                question(header: "", text: "Empty header", options: ["C", "D"]),
+                question(header: "first", text: "", options: ["A", "B"]),
+                question(header: "second", text: "   ", options: ["C", "D"]),
             ]
         )
 
@@ -163,8 +163,8 @@ final class AppStateQuestionFlowTests: XCTestCase {
 
         await Task.yield()
         appState.answerQuestionMulti([
-            (question: "No header", answer: "B"),
-            (question: "Empty header", answer: "C"),
+            (question: "", answer: "B"),
+            (question: "   ", answer: "C"),
         ])
 
         let responseData = await responseTask.value
