@@ -193,6 +193,81 @@ final class AppStateQuestionFlowTests: XCTestCase {
         XCTAssertEqual(appState.questionQueue.count, 1)
     }
 
+    /// Regression: answering an AskUserQuestion while another session's
+    /// completion is queued (interactive surface was locked) must not strand
+    /// the panel on a contentless `.questionCard`. Previously showNextPending →
+    /// showNextCompletionOrCollapse → showCompletion bounced off the still-locked
+    /// `.questionCard` surface, re-queued the completion, and left surface on
+    /// `.questionCard` with an empty questionQueue — a state `.onHover` refuses
+    /// to collapse, so the panel was permanently stuck.
+    func testAnsweringQuestionWithQueuedCompletionDoesNotStrandQuestionCard() async throws {
+        let autoExpandKey = SettingsKey.autoExpandOnCompletion
+        let previous = UserDefaults.standard.object(forKey: autoExpandKey)
+        UserDefaults.standard.set(true, forKey: autoExpandKey)
+        defer {
+            if let previous {
+                UserDefaults.standard.set(previous, forKey: autoExpandKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: autoExpandKey)
+            }
+        }
+
+        let appState = AppState()
+
+        // A second session that finishes while the question card is up.
+        var sessionB = SessionSnapshot()
+        sessionB.source = "claude"
+        sessionB.lastAssistantMessage = "done"
+        appState.sessions["s-B"] = sessionB
+
+        // Session A asks a question -> surface locks to .questionCard(s-A).
+        let questionEvent = try makeAskUserQuestionEvent(
+            sessionId: "s-A",
+            questions: [question(header: "q", text: "Pick one?", options: ["A", "B"])]
+        )
+        let responseTask = Task<Data, Never> {
+            await withCheckedContinuation { continuation in
+                appState.handleAskUserQuestion(questionEvent, continuation: continuation)
+            }
+        }
+        await Task.yield()
+        guard case .questionCard = appState.surface else {
+            return XCTFail("Expected .questionCard after AskUserQuestion, got \(appState.surface)")
+        }
+
+        // Session B completes while the question card is locked -> queued.
+        appState.handleEvent(try makeStopEvent(sessionId: "s-B"))
+
+        // User answers A. Must NOT leave the panel stranded on .questionCard.
+        appState.answerQuestionMulti([(question: "Pick one?", answer: "A")])
+        _ = await responseTask.value
+
+        XCTAssertEqual(appState.questionQueue.count, 0)
+        if case .questionCard = appState.surface {
+            XCTFail("Panel stranded on contentless .questionCard after answering with a queued completion")
+        }
+        // The queued completion for s-B should now surface.
+        if case .completionCard(let sid) = appState.surface {
+            XCTAssertEqual(sid, "s-B")
+        } else {
+            XCTFail("Expected queued completion for s-B to surface, got \(appState.surface)")
+        }
+    }
+
+    private func makeStopEvent(sessionId: String) throws -> HookEvent {
+        let payload: [String: Any] = [
+            "hook_event_name": "Stop",
+            "session_id": sessionId,
+            "_source": "claude",
+            "last_assistant_message": "done",
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        guard let event = HookEvent(from: data) else {
+            throw NSError(domain: "AppStateQuestionFlowTests", code: 2)
+        }
+        return event
+    }
+
     private func makeAskUserQuestionEvent(sessionId: String, questions: [[String: Any]]) throws -> HookEvent {
         let payload: [String: Any] = [
             "hook_event_name": "PermissionRequest",

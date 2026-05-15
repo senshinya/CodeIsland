@@ -1682,11 +1682,19 @@ final class AppState {
             // question card) would be orphaned after the blocking surface dismisses.
             switch surface {
             case .approvalCard, .questionCard:
+                // The interactive card is being dismissed. Clear the surface lock
+                // BEFORE draining completions: showNextCompletionOrCollapse →
+                // showCompletion bails out via its `isInteractiveSurfaceLocked`
+                // guard while surface is still .approvalCard/.questionCard,
+                // re-appending the popped sessionId and returning without moving
+                // surface. With questionQueue/permissionQueue now empty that
+                // stranded the panel on a contentless card that .onHover refuses
+                // to collapse (NotchPanelView's .questionCard/.approvalCard early
+                // return) — permanently stuck until the next question arrived.
+                surface = .collapsed
                 if !completionQueue.isEmpty {
                     completionHasBeenEntered = false
                     showNextCompletionOrCollapse()
-                } else {
-                    surface = .collapsed
                 }
             default:
                 break
