@@ -161,7 +161,9 @@ final class JSONLTailerTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
 
         let expectation = self.expectation(description: "delta delivered")
-        var captured: ConversationTailDelta?
+        // onDelta fires on the tailer's serial queue; the test reads `captured`
+        // only after wait(for:), so the access is ordered, not racy.
+        nonisolated(unsafe) var captured: ConversationTailDelta?
 
         let tailer = JSONLTailer(
             queue: DispatchQueue(label: "tailer-test"),
@@ -214,7 +216,9 @@ final class JSONLTailerTests: XCTestCase {
         try Data("".utf8).write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
 
-        var callCount = 0
+        // onDelta fires on the tailer's serial queue; reads happen after the
+        // sleeps below, so this access is ordered, not racy.
+        nonisolated(unsafe) var callCount = 0
         let tailer = JSONLTailer(
             queue: DispatchQueue(label: "tailer-test"),
             onDelta: { _ in callCount += 1 }

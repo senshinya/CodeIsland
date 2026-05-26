@@ -263,6 +263,10 @@ struct ConfigInstaller {
             let dirExists = fm.fileExists(atPath: cli.dirPath)
             guard dirExists else { continue }
             if isHooksInstalled(for: cli, fm: fm) { continue }
+            // #182: respect a user who deleted some hook events by hand — don't
+            // re-add them unless nothing of ours remains or a stale entry needs
+            // cleanup.
+            if shouldPreservePartialHooks(for: cli, fm: fm) { continue }
             if cli.source == "claude" {
                 if installClaudeHooks(cli: cli, fm: fm) {
                     repaired.append(cli.name)
@@ -717,6 +721,25 @@ struct ConfigInstaller {
         // Or stale entries under event names the current CLI version rejects
         if hasStaleIncompatibleEvents(hooks, compatibleEvents: requiredEvents) { return false }
         return true
+    }
+
+    /// #182: tell apart a user who intentionally kept only some hook events
+    /// from a config that was never installed, fully wiped, or corrupted.
+    /// Returns true when at least one of our hook entries is present and
+    /// nothing stale needs rewriting — meaning verifyAndRepair should leave the
+    /// (incomplete) config untouched instead of re-adding the removed events.
+    static func shouldPreservePartialHooks(hooks: [String: Any], events: [(String, Int, Bool)]) -> Bool {
+        if hasStaleAsyncKey(hooks) { return false }
+        return events.contains { (event, _, _) in
+            guard let entries = hooks[event] as? [[String: Any]] else { return false }
+            return entries.contains { containsOurHook($0) }
+        }
+    }
+
+    private static func shouldPreservePartialHooks(for cli: CLIConfig, fm: FileManager) -> Bool {
+        guard let root = parseJSONFile(at: cli.fullPath, fm: fm),
+              let hooks = root[cli.configKey] as? [String: Any] else { return false }
+        return shouldPreservePartialHooks(hooks: hooks, events: cli.events)
     }
 
     /// Detect legacy hook entries with invalid "async" key

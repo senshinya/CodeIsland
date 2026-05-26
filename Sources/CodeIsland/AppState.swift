@@ -1565,9 +1565,12 @@ final class AppState {
         originalQuestions: [[String: Any]]?
     ) -> [String: Any] {
         var updatedInput = event.toolInput ?? [:]
-        if let originalQuestions {
-            updatedInput["questions"] = originalQuestions
-        }
+        // #191: `questions` must always be present in updatedInput. Claude Code's
+        // mapToolResultToToolResultBlockParam calls H.map() on it directly; if the
+        // key is absent H is undefined and the call crashes with
+        // "undefined is not an object (evaluating 'H.map')".
+        // Fall back to the raw toolInput value when the [[String: Any]] cast fails.
+        updatedInput["questions"] = originalQuestions ?? (event.toolInput?["questions"] ?? [] as [[String: Any]])
         updatedInput["answers"] = answers
         if let answer {
             updatedInput["answer"] = answer
