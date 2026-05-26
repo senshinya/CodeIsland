@@ -3,7 +3,7 @@ import ServiceManagement
 
 enum AppVersion {
     /// Update this each release. Used as fallback when Info.plist is unavailable (debug builds).
-    static let fallback = "1.0.24.5-shinya"
+    static let fallback = "1.0.25.1-shinya"
 
     static var current: String {
         let base = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? fallback
