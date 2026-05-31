@@ -919,6 +919,20 @@ struct TerminalActivator {
 
     // MARK: - Generic (bring app to front)
 
+    /// Unhide + raise an app by bundle ID without synthesizing a fresh window,
+    /// so terminals with a Quick Terminal (e.g. Warp) are brought frontmost
+    /// without popping the Quick Terminal over the existing window.
+    private static func raiseAppWithoutQuickTerminal(bundleId: String) {
+        if let app = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == bundleId
+        }) {
+            if app.isHidden { app.unhide() }
+        }
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
+            NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+        }
+    }
+
     private static func bringToFront(_ termApp: String) {
         let name: String
         let lower = termApp.lowercased()
