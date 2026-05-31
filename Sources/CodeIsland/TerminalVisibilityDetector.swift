@@ -26,18 +26,27 @@ struct TerminalVisibilityDetector {
     /// Safe to call from the main thread — no AppleScript or subprocess calls.
     static func isTerminalFrontmostForSession(_ session: SessionSnapshot) -> Bool {
         guard let frontApp = NSWorkspace.shared.frontmostApplication else { return false }
+        let frontBundleId = frontApp.bundleIdentifier?.lowercased() ?? ""
+
+        if isGhosttySessionVisibleInAnyWindow(session) {
+            return true
+        }
+
+        if isWarpSession(session) {
+            guard frontBundleId == "dev.warp.warp-stable" else { return false }
+            return isWarpSessionTabActive(session)
+        }
 
         if let termBundleId = session.termBundleId?.lowercased(),
            !termBundleId.isEmpty {
             // Bundle ID is known — match exclusively by bundle ID, don't fall through
             // to TERM_PROGRAM (avoids Warp's TERM_PROGRAM=Apple_Terminal false positive)
-            return frontApp.bundleIdentifier?.lowercased() == termBundleId
+            return frontBundleId == termBundleId
         }
 
         guard let termApp = session.termApp else { return false }
 
         let frontName = frontApp.localizedName?.lowercased() ?? ""
-        let bundleId = frontApp.bundleIdentifier?.lowercased() ?? ""
         let term = termApp.lowercased()
             .replacingOccurrences(of: ".app", with: "")
             .replacingOccurrences(of: "apple_", with: "")
@@ -45,7 +54,7 @@ struct TerminalVisibilityDetector {
 
         return normalizedFront.contains(term)
             || term.contains(normalizedFront)
-            || bundleId.contains(term)
+            || frontBundleId.contains(term)
     }
 
     // MARK: - Tab-level check (background thread only)
@@ -91,6 +100,9 @@ struct TerminalVisibilityDetector {
         if bid.contains("kitty") {
             return isKittyWindowActive(session)
         }
+        if bid == "dev.warp.warp-stable" {
+            return isWarpSessionTabActive(session)
+        }
 
         // Fallback: route by TERM_PROGRAM if bundle ID didn't match
         if let termApp = session.termApp {
@@ -106,6 +118,70 @@ struct TerminalVisibilityDetector {
 
         // Unknown terminal — can't determine tab, prefer showing notification
         return false
+    }
+
+    private static func isWarpSession(_ session: SessionSnapshot) -> Bool {
+        let bid = session.termBundleId?.lowercased() ?? ""
+        let term = session.termApp?.lowercased() ?? ""
+        return bid == "dev.warp.warp-stable" || term.contains("warp")
+    }
+
+    private static func isWarpSessionTabActive(_ session: SessionSnapshot) -> Bool {
+        guard let cwd = session.cwd, !cwd.isEmpty else { return false }
+        return (try? WarpPaneResolver().isActiveTab(cwd: cwd)) == true
+    }
+
+    /// Ghostty Quick Terminal can be visible while macOS still reports another app
+    /// as frontmost. Treat a visible matching Ghostty window as "already in view"
+    /// so smart-suppress does not pop approval/completion UI over the user's terminal.
+    private static func isGhosttySessionVisibleInAnyWindow(_ session: SessionSnapshot) -> Bool {
+        let bid = session.termBundleId?.lowercased() ?? ""
+        let term = session.termApp?.lowercased() ?? ""
+        guard bid.contains("ghostty") || term == "ghostty" || term == "xterm-ghostty" else {
+            return false
+        }
+
+        guard let cwd = session.cwd, !cwd.isEmpty else { return false }
+        let dirName = (cwd as NSString).lastPathComponent
+        let sourceKeyword = session.source
+        var cwdVariants = [cwd]
+        let home = NSHomeDirectory()
+        if cwd == home {
+            cwdVariants.append("~")
+        } else if cwd.hasPrefix(home + "/") {
+            cwdVariants.append("~" + String(cwd.dropFirst(home.count)))
+        }
+
+        guard let windowList = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else {
+            return false
+        }
+
+        return windowList.contains { window in
+            guard let owner = window[kCGWindowOwnerName as String] as? String,
+                  owner.lowercased().contains("ghostty"),
+                  let layer = window[kCGWindowLayer as String] as? Int,
+                  layer == 0,
+                  let bounds = window[kCGWindowBounds as String] as? [String: Any],
+                  let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+                  rect.width > 20,
+                  rect.height > 20 else {
+                return false
+            }
+            let title = (window[kCGWindowName as String] as? String ?? "").lowercased()
+            guard !title.isEmpty else { return false }
+            let lowerDir = dirName.lowercased()
+            let lowerSource = sourceKeyword.lowercased()
+            if !lowerSource.isEmpty, !title.contains(lowerSource) {
+                return false
+            }
+            if title.contains(lowerDir) {
+                return true
+            }
+            return cwdVariants.contains { title.contains($0.lowercased()) }
+        }
     }
 
     // MARK: - iTerm2
