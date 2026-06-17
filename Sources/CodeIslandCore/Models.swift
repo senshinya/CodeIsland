@@ -204,12 +204,23 @@ public struct QuestionPayload {
     public let options: [String]?
     public let descriptions: [String]?
     public let header: String?
+    /// When true the answer is sensitive (e.g. a Codex `isSecret` plan-mode
+    /// prompt). Surfaces should avoid echoing the question text or options to
+    /// untrusted/off-device channels. (#209)
+    public let isSecret: Bool
 
-    public init(question: String, options: [String]?, descriptions: [String]? = nil, header: String? = nil) {
+    public init(
+        question: String,
+        options: [String]?,
+        descriptions: [String]? = nil,
+        header: String? = nil,
+        isSecret: Bool = false
+    ) {
         self.question = question
         self.options = options
         self.descriptions = descriptions
         self.header = header
+        self.isSecret = isSecret
     }
 
     /// Try to extract question from a Notification hook event

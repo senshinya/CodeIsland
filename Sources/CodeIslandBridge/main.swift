@@ -334,6 +334,20 @@ if let cmuxWorkspace = env["CMUX_WORKSPACE_ID"], !cmuxWorkspace.isEmpty {
     json["_cmux_workspace_id"] = cmuxWorkspace
 }
 
+// Superset (Electron agent-orchestration terminal) — TERM_PROGRAM is spoofed to "kitty"
+// and __CFBundleIdentifier is stripped from the PTY env, so the only reliable Superset
+// signal is its own SUPERSET_* env vars (which survive Superset's env allowlist). The mere
+// presence of any SUPERSET_* var uniquely means "running inside Superset"; the activator
+// uses that to route to com.superset.desktop instead of the real kitty app. (#213)
+if let supersetWs = env["SUPERSET_WORKSPACE_ID"], !supersetWs.isEmpty {
+    json["_superset_workspace_id"] = supersetWs
+}
+// Pane / terminal id — captured for future pane-precision if Superset ever ships a focus CLI;
+// either var's presence is also a reliable Superset signal on its own.
+if let supersetPane = env["SUPERSET_PANE_ID"] ?? env["SUPERSET_TERMINAL_ID"], !supersetPane.isEmpty {
+    json["_superset_pane_id"] = supersetPane
+}
+
 // Source tag (e.g. "codex" when called via --source codex)
 if let source = sourceTag {
     json["_source"] = source

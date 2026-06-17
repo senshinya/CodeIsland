@@ -23,6 +23,7 @@ struct MascotView: View {
     @AppStorage(SettingsKey.mascotSpeedProcessing) private var processingSpeedPct = SettingsDefaults.mascotSpeedProcessing
     @AppStorage(SettingsKey.mascotSpeedIdle) private var idleSpeedPct = SettingsDefaults.mascotSpeedIdle
     @AppStorage(SettingsKey.mascotSpeedWaiting) private var waitingSpeedPct = SettingsDefaults.mascotSpeedWaiting
+    @ObservedObject private var animationGate = MascotAnimationGate.shared
 
     /// Effective speed percentage for the current status (-1 means use global)
     private var effectiveSpeedPct: Int {
@@ -45,5 +46,7 @@ struct MascotView: View {
             }
         }
         .environment(\.mascotSpeed, Double(effectiveSpeedPct) / 100.0)
+        .environment(\.mascotAnimationsActive, animationGate.animationsActive)
+        .environment(\.mascotAnimationEpoch, animationGate.epoch)
     }
 }

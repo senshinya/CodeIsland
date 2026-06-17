@@ -38,6 +38,8 @@ public struct SessionSnapshot: Sendable {
     public var termBundleId: String?    // __CFBundleIdentifier for precise terminal ID
     public var cmuxSurfaceId: String?   // cmux surface UUID
     public var cmuxWorkspaceId: String? // cmux workspace UUID
+    public var supersetWorkspaceId: String? // Superset workspace UUID (from SUPERSET_WORKSPACE_ID env var); presence means running inside Superset
+    public var supersetPaneId: String?  // Superset pane/terminal id (from SUPERSET_PANE_ID / SUPERSET_TERMINAL_ID env var)
     public var cliPid: pid_t?            // CLI process PID (from bridge _ppid)
     public var cliStartTime: Date?       // Start time of the tracked CLI PID (guards PID reuse)
     public var source: String = "claude" // "claude" or "codex"
@@ -228,6 +230,10 @@ public struct SessionSnapshot: Sendable {
             if lower.contains("android.studio") { return "Android Studio" }
             if lower.contains("antigravity") { return "Antigravity" }
         }
+        // Superset spoofs TERM_PROGRAM to "kitty" and strips __CFBundleIdentifier, so the only
+        // way to label it correctly is its own SUPERSET_* env vars. Check before the TERM_PROGRAM
+        // fallback below, otherwise it would mislabel as "Kitty". (#213)
+        if supersetWorkspaceId != nil || supersetPaneId != nil { return "Superset" }
         // Fallback to TERM_PROGRAM
         guard let app = termApp else { return nil }
         let lower = app.lowercased()
@@ -490,6 +496,20 @@ public func reduceEvent(
         if let tmux = event.rawJSON["_tmux"] as? String, !tmux.isEmpty { sessions[sessionId]?.tmuxEnv = tmux }
         if let surface = event.rawJSON["_cmux_surface_id"] as? String, !surface.isEmpty { sessions[sessionId]?.cmuxSurfaceId = surface }
         if let workspace = event.rawJSON["_cmux_workspace_id"] as? String, !workspace.isEmpty { sessions[sessionId]?.cmuxWorkspaceId = workspace }
+        if let supersetWs = event.rawJSON["_superset_workspace_id"] as? String, !supersetWs.isEmpty { sessions[sessionId]?.supersetWorkspaceId = supersetWs }
+        if let supersetPane = event.rawJSON["_superset_pane_id"] as? String, !supersetPane.isEmpty { sessions[sessionId]?.supersetPaneId = supersetPane }
+        // Superset's identity can also arrive inside the `_env` sub-object (direct-plugin
+        // payload). The snapshot was reset above, so re-capture it here for SessionStart. (#213)
+        if let env = event.rawJSON["_env"] as? [String: String] {
+            if sessions[sessionId]?.supersetWorkspaceId == nil,
+               let workspace = env["SUPERSET_WORKSPACE_ID"], !workspace.isEmpty {
+                sessions[sessionId]?.supersetWorkspaceId = workspace
+            }
+            if sessions[sessionId]?.supersetPaneId == nil,
+               let pane = env["SUPERSET_PANE_ID"] ?? env["SUPERSET_TERMINAL_ID"], !pane.isEmpty {
+                sessions[sessionId]?.supersetPaneId = pane
+            }
+        }
         if let mode = event.rawJSON["permission_mode"] as? String { sessions[sessionId]?.permissionMode = mode }
         if let roots = event.rawJSON["workspace_roots"] as? [String], let first = roots.first, !first.isEmpty {
             sessions[sessionId]?.cwd = first
@@ -629,6 +649,14 @@ public func extractMetadata(into sessions: inout [String: SessionSnapshot], sess
     if let workspace = event.rawJSON["_cmux_workspace_id"] as? String, !workspace.isEmpty {
         sessions[sessionId]?.cmuxWorkspaceId = workspace
     }
+    // Superset workspace / pane (injected by bridge from SUPERSET_* env vars). Presence routes
+    // activation to com.superset.desktop instead of the spoofed kitty TERM_PROGRAM. (#213)
+    if let supersetWs = event.rawJSON["_superset_workspace_id"] as? String, !supersetWs.isEmpty {
+        sessions[sessionId]?.supersetWorkspaceId = supersetWs
+    }
+    if let supersetPane = event.rawJSON["_superset_pane_id"] as? String, !supersetPane.isEmpty {
+        sessions[sessionId]?.supersetPaneId = supersetPane
+    }
     if let bundle = event.rawJSON["_term_bundle"] as? String, !bundle.isEmpty {
         sessions[sessionId]?.termBundleId = bundle
     }
@@ -662,6 +690,14 @@ public func extractMetadata(into sessions: inout [String: SessionSnapshot], sess
         if sessions[sessionId]?.tmuxPane == nil,
            let pane = env["TMUX_PANE"], !pane.isEmpty {
             sessions[sessionId]?.tmuxPane = pane
+        }
+        if sessions[sessionId]?.supersetWorkspaceId == nil,
+           let workspace = env["SUPERSET_WORKSPACE_ID"], !workspace.isEmpty {
+            sessions[sessionId]?.supersetWorkspaceId = workspace
+        }
+        if sessions[sessionId]?.supersetPaneId == nil,
+           let pane = env["SUPERSET_PANE_ID"] ?? env["SUPERSET_TERMINAL_ID"], !pane.isEmpty {
+            sessions[sessionId]?.supersetPaneId = pane
         }
     }
     if let ppid = event.rawJSON["_ppid"] as? Int, ppid > 0 {

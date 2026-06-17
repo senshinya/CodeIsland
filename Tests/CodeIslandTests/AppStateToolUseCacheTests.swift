@@ -232,7 +232,141 @@ final class AppStateToolUseCacheTests: XCTestCase {
         XCTAssertEqual(session?.currentTool, "Bash")
     }
 
+    // MARK: - issue #216: orphan permissions (no tool_use_id) auto-dismiss on terminal approval
+
+    /// Repro for #216: a PermissionRequest carrying NO tool_use_id can never be
+    /// correlated by resolveToolUseIfCompleted, so approving in the terminal left
+    /// the card up until the user closed it manually. After the fix, a follow-up
+    /// same-session activity event resolves the orphan as approved-in-terminal.
+    func testOrphanPermissionResolvedByFollowUpActivity() async throws {
+        let appState = AppState()
+        let orphan = try makeHookEvent(
+            name: "PermissionRequest",
+            sessionId: "s1",
+            toolName: "Bash",
+            toolUseId: nil,
+            toolInput: ["command": "echo hi"]
+        )
+
+        let responseTask = Task<Data, Never> {
+            await withCheckedContinuation { cont in
+                appState.handlePermissionRequest(orphan, continuation: cont)
+            }
+        }
+        await Task.yield()
+        XCTAssertEqual(appState.permissionQueue.count, 1)
+        XCTAssertNil(appState.permissionQueue.first?.toolUseId)
+
+        // Agent moved on (user approved in terminal) — a follow-up PostToolUse
+        // arrives for the same session with no correlatable tool_use_id.
+        appState.handleEvent(try makeHookEvent(
+            name: "PostToolUse",
+            sessionId: "s1",
+            toolName: "Bash",
+            toolUseId: nil
+        ))
+
+        let response = await responseTask.value
+        XCTAssertEqual(try behavior(response), "allow")
+        XCTAssertEqual(appState.permissionQueue.count, 0)
+    }
+
+    /// The orphan resolver only touches requests with an empty/nil tool_use_id.
+    /// A queued request that DOES carry a tool_use_id is never resolved by the
+    /// orphan path itself — it runs first and leaves the correlated request for
+    /// the existing surgical-drain / blanket-drain paths to handle.
+    func testOrphanResolverLeavesCorrelatedRequestUntouched() async throws {
+        let appState = AppState()
+        let correlated = try makePermissionEvent(sessionId: "s1", toolName: "Bash", toolUseId: "toolu_keep")
+
+        let responseTask = Task<Data, Never> {
+            await withCheckedContinuation { cont in
+                appState.handlePermissionRequest(correlated, continuation: cont)
+            }
+        }
+        await Task.yield()
+        XCTAssertEqual(appState.permissionQueue.count, 1)
+
+        // The orphan resolver in isolation must not drain a tool_use_id-bearing
+        // request even when an activity event for the same session arrives.
+        appState.resolveOrphanPermissionsOnActivity(try makeHookEvent(
+            name: "PostToolUse",
+            sessionId: "s1",
+            toolName: "Bash",
+            toolUseId: nil
+        ))
+
+        XCTAssertEqual(appState.permissionQueue.count, 1,
+            "Orphan resolver must not touch a request carrying a tool_use_id (#147)")
+        XCTAssertEqual(appState.permissionQueue.first?.toolUseId, "toolu_keep")
+
+        appState.approvePermission()
+        let response = await responseTask.value
+        XCTAssertEqual(try behavior(response), "allow")
+    }
+
+    // MARK: - issue #224: "always allow" rule specifier for MCP vs non-MCP tools
+
+    /// #224: "Always allow" for an MCP tool (`mcp__server__tool`) must emit a
+    /// bare-tool-name rule with NO `ruleContent` specifier. Claude Code's MCP
+    /// permission rules don't take a specifier; sending `ruleContent: "*"`
+    /// assembles `mcp__server__tool(*)`, which never matches a real MCP call, so
+    /// the rule silently fails to persist and the same approval re-prompts.
+    func testAlwaysAllowMCPToolOmitsRuleSpecifier() async throws {
+        let appState = AppState()
+        let event = try makePermissionEvent(
+            sessionId: "s-mcp-always",
+            toolName: "mcp__sh_wiki__fetch_page",
+            toolUseId: "toolu_mcp"
+        )
+
+        let responseTask = Task<Data, Never> {
+            await withCheckedContinuation { continuation in
+                appState.handlePermissionRequest(event, continuation: continuation)
+            }
+        }
+        await Task.yield()
+        appState.approvePermission(always: true)
+
+        let rule = try firstAlwaysAllowRule(from: await responseTask.value)
+        XCTAssertEqual(rule["toolName"] as? String, "mcp__sh_wiki__fetch_page")
+        XCTAssertNil(rule["ruleContent"], "MCP tool rules must not carry a specifier (#224)")
+    }
+
+    /// Non-MCP tools keep the wildcard specifier so "always allow" still applies
+    /// to every future call of that tool. The #224 fix must not change them.
+    func testAlwaysAllowNonMCPToolKeepsWildcardSpecifier() async throws {
+        let appState = AppState()
+        let event = try makePermissionEvent(
+            sessionId: "s-bash-always",
+            toolName: "Bash",
+            toolUseId: "toolu_bash"
+        )
+
+        let responseTask = Task<Data, Never> {
+            await withCheckedContinuation { continuation in
+                appState.handlePermissionRequest(event, continuation: continuation)
+            }
+        }
+        await Task.yield()
+        appState.approvePermission(always: true)
+
+        let rule = try firstAlwaysAllowRule(from: await responseTask.value)
+        XCTAssertEqual(rule["toolName"] as? String, "Bash")
+        XCTAssertEqual(rule["ruleContent"] as? String, "*")
+    }
+
     // MARK: - Helpers
+
+    private func firstAlwaysAllowRule(from responseData: Data) throws -> [String: Any] {
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: responseData) as? [String: Any])
+        let hookSpecific = try XCTUnwrap(json["hookSpecificOutput"] as? [String: Any])
+        let decision = try XCTUnwrap(hookSpecific["decision"] as? [String: Any])
+        let updated = try XCTUnwrap(decision["updatedPermissions"] as? [[String: Any]])
+        let first = try XCTUnwrap(updated.first)
+        let rules = try XCTUnwrap(first["rules"] as? [[String: Any]])
+        return try XCTUnwrap(rules.first)
+    }
 
     private func makeHookEvent(
         name: String,

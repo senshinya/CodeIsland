@@ -72,6 +72,20 @@ final class CodexAppServerClientTests: XCTestCase {
         XCTAssertEqual(msg?.kind, .notification(method: "thread/started"))
     }
 
+    /// Codex surfaces plan-mode prompts as a server->client *request* (has an id),
+    /// not a notification. It must classify as `.request` so AppState can answer it. (#209)
+    func testParseMessageClassifiesRequestUserInput() {
+        let data = Data(#"{"jsonrpc":"2.0","id":"r-1","method":"item/tool/requestUserInput","params":{"threadId":"t-1","turnId":"u-1","itemId":"i-1","questions":[{"id":"q1","header":"Plan","question":"Pick","isOther":false,"isSecret":false,"options":[{"label":"A","description":"d"}]}]}}"#.utf8)
+        let msg = CodexAppServerClient.parseMessage(data)
+        XCTAssertEqual(msg?.kind, .request(method: "item/tool/requestUserInput", id: .string("r-1")))
+        let questions = msg?.raw["params"]?.asObject?["questions"]
+        if case .array(let arr)? = questions {
+            XCTAssertEqual(arr.first?.asObject?["id"]?.asString, "q1")
+        } else {
+            XCTFail("expected questions array")
+        }
+    }
+
     func testParseMessageClassifiesResponse() {
         let data = Data(#"{"id":7,"result":{"ok":true}}"#.utf8)
         let msg = CodexAppServerClient.parseMessage(data)

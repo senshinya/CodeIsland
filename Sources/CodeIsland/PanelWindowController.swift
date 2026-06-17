@@ -417,6 +417,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         setupHorizontalDragMonitor()
         updatePosition()
         panel.orderFrontRegardless()
+        MascotAnimationGate.shared.setPanelVisible(true)
 
         // Screen change observer
         NotificationCenter.default.addObserver(
@@ -801,17 +802,20 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         let settings = SettingsManager.shared
         if settings.hideInFullscreen && fullscreenLatch {
             panel.orderOut(nil)
+            MascotAnimationGate.shared.setPanelVisible(false)
             return
         }
 
         if settings.hideWhenNoSession && appState.activeSessionCount == 0 {
             panel.orderOut(nil)
+            MascotAnimationGate.shared.setPanelVisible(false)
             return
         }
 
         if !panel.isVisible {
             panel.orderFrontRegardless()
         }
+        MascotAnimationGate.shared.setPanelVisible(true)
     }
 
     private func isActiveSpaceFullscreen() -> Bool {

@@ -8,6 +8,8 @@ struct DexView: View {
     var size: CGFloat = 27
     @State private var alive = false
     @Environment(\.mascotSpeed) private var speed
+    @Environment(\.mascotAnimationsActive) private var animationsActive
+    @Environment(\.mascotAnimationEpoch) private var animationEpoch
 
     private static let cloudTop = Color(red: 0.67, green: 0.70, blue: 1.00)
     private static let cloudMid = Color(red: 0.49, green: 0.57, blue: 0.99)
@@ -34,6 +36,27 @@ struct DexView: View {
         .onChange(of: status) {
             alive = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { alive = true }
+        }
+    }
+
+    /// Drives `content` from a periodic `TimelineView` while animations are
+    /// active, falling back to a single static frame when the panel is hidden or
+    /// the machine is asleep. Keyed on `animationEpoch` so SwiftUI re-anchors the
+    /// schedule to the current time on wake/re-show instead of replaying missed
+    /// ticks (#225).
+    @ViewBuilder
+    private func gatedTimeline<Content: View>(
+        every interval: TimeInterval,
+        staticTime: Double = 0,
+        @ViewBuilder content: @escaping (Double) -> Content
+    ) -> some View {
+        if animationsActive {
+            TimelineView(.periodic(from: .now, by: interval)) { ctx in
+                content(ctx.date.timeIntervalSinceReferenceDate * speed)
+            }
+            .id(animationEpoch)
+        } else {
+            content(staticTime)
         }
     }
 
@@ -172,11 +195,11 @@ struct DexView: View {
 
     private var sleepScene: some View {
         ZStack {
-            TimelineView(.periodic(from: .now, by: 0.06)) { ctx in
-                sleepCanvas(t: ctx.date.timeIntervalSinceReferenceDate * speed)
+            gatedTimeline(every: 0.06) { t in
+                sleepCanvas(t: t)
             }
-            TimelineView(.periodic(from: .now, by: 0.05)) { ctx in
-                floatingZs(t: ctx.date.timeIntervalSinceReferenceDate * speed)
+            gatedTimeline(every: 0.05) { t in
+                floatingZs(t: t)
             }
         }
     }
@@ -217,8 +240,8 @@ struct DexView: View {
     }
 
     private var workScene: some View {
-        TimelineView(.periodic(from: .now, by: 0.03)) { timeline in
-            workCanvas(t: timeline.date.timeIntervalSinceReferenceDate * speed)
+        gatedTimeline(every: 0.03) { t in
+            workCanvas(t: t)
         }
     }
 
@@ -238,15 +261,25 @@ struct DexView: View {
     }
 
     private var alertScene: some View {
-        ZStack {
+        // The pulsing glow uses a `.repeatForever` CAAnimation that misbehaves
+        // across display wake (#225). Only let it run while animations are
+        // active; otherwise hold a static frame so it can't pin a core.
+        let glowActive = alive && animationsActive
+        return ZStack {
             Circle()
-                .fill(Self.alertC.opacity(alive ? 0.10 : 0))
+                .fill(Self.alertC.opacity(glowActive ? 0.10 : 0))
                 .frame(width: size * 0.82)
                 .blur(radius: size * 0.05)
-                .animation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true), value: alive)
+                .animation(
+                    animationsActive
+                        ? .easeInOut(duration: 0.5).repeatForever(autoreverses: true)
+                        : .default,
+                    value: glowActive
+                )
+                .id(animationEpoch)
 
-            TimelineView(.periodic(from: .now, by: 0.03)) { ctx in
-                alertCanvas(t: ctx.date.timeIntervalSinceReferenceDate * speed)
+            gatedTimeline(every: 0.03) { t in
+                alertCanvas(t: t)
             }
         }
     }

@@ -8,6 +8,8 @@ struct ClawdView: View {
     var size: CGFloat = 27
     @State private var alive = false
     @Environment(\.mascotSpeed) private var speed
+    @Environment(\.mascotAnimationsActive) private var animationsActive
+    @Environment(\.mascotAnimationEpoch) private var animationEpoch
 
     // Colors from clawd-on-desk
     private static let bodyC  = Color(red: 0.871, green: 0.533, blue: 0.427) // #DE886D
@@ -31,6 +33,27 @@ struct ClawdView: View {
         .onChange(of: status) {
             alive = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { alive = true }
+        }
+    }
+
+    /// Drives `content` from a periodic `TimelineView` while animations are
+    /// active, falling back to a single static frame (rendered at a fixed
+    /// reference time) when the panel is hidden or the machine is asleep.
+    /// Keying the schedule on `animationEpoch` forces SwiftUI to re-anchor it to
+    /// the current time on wake/re-show instead of replaying missed ticks (#225).
+    @ViewBuilder
+    private func gatedTimeline<Content: View>(
+        every interval: TimeInterval,
+        staticTime: Double = 0,
+        @ViewBuilder content: @escaping (Double) -> Content
+    ) -> some View {
+        if animationsActive {
+            TimelineView(.periodic(from: .now, by: interval)) { ctx in
+                content(ctx.date.timeIntervalSinceReferenceDate * speed)
+            }
+            .id(animationEpoch)
+        } else {
+            content(staticTime)
         }
     }
 
@@ -110,13 +133,12 @@ struct ClawdView: View {
     private var sleepScene: some View {
         ZStack {
             // Character body (behind)
-            TimelineView(.periodic(from: .now, by: 0.06)) { ctx in
-                sleepCanvas(t: ctx.date.timeIntervalSinceReferenceDate * speed)
+            gatedTimeline(every: 0.06) { t in
+                sleepCanvas(t: t)
             }
 
             // Z's — continuous float-up loop, staggered timing
-            TimelineView(.periodic(from: .now, by: 0.05)) { ctx in
-                let t = ctx.date.timeIntervalSinceReferenceDate * speed
+            gatedTimeline(every: 0.05) { t in
                 floatingZs(t: t)
             }
         }
@@ -161,8 +183,7 @@ struct ClawdView: View {
     // WORK — typing: bounce + arm rotation + keyboard + squinted eyes
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     private var workScene: some View {
-        TimelineView(.periodic(from: .now, by: 0.03)) { timeline in
-            let t = timeline.date.timeIntervalSinceReferenceDate * speed
+        gatedTimeline(every: 0.03) { t in
             workCanvas(t: t)
         }
     }
@@ -257,15 +278,25 @@ struct ClawdView: View {
     // Matches clawd-notification.svg keyframes
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     private var alertScene: some View {
-        ZStack {
+        // The pulsing glow uses a `.repeatForever` CAAnimation that misbehaves
+        // across display wake (#225). Only let it run while animations are
+        // active; otherwise hold a static frame so it can't pin a core.
+        let glowActive = alive && animationsActive
+        return ZStack {
             Circle()
-                .fill(Self.alertC.opacity(alive ? 0.12 : 0))
+                .fill(Self.alertC.opacity(glowActive ? 0.12 : 0))
                 .frame(width: size * 0.8)
                 .blur(radius: size * 0.05)
-                .animation(.easeInOut(duration: 0.5).repeatForever(autoreverses: true), value: alive)
+                .animation(
+                    animationsActive
+                        ? .easeInOut(duration: 0.5).repeatForever(autoreverses: true)
+                        : .default,
+                    value: glowActive
+                )
+                .id(animationEpoch)
 
-            TimelineView(.periodic(from: .now, by: 0.03)) { ctx in
-                alertCanvas(t: ctx.date.timeIntervalSinceReferenceDate * speed)
+            gatedTimeline(every: 0.03) { t in
+                alertCanvas(t: t)
             }
         }
     }

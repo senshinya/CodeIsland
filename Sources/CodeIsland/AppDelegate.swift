@@ -11,7 +11,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var hookServer: HookServer?
     private var hookRecoveryTimer: Timer?
     private var lastHookCheck: Date = .distantPast
-    private var globalShortcutMonitor: Any?
+    private let hotKeyManager = GlobalHotKeyManager()
     private var localShortcutMonitor: Any?
     let appState = AppState()
 
@@ -45,25 +45,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         appState.startSessionDiscovery()
         appState.startCodexAppServerWatcher()
 
-        // Buddy bridge (opt-in): mirrors the Dynamic Island onto the companion
-        // device and routes its button press back to TerminalActivator.
-        ESP32StatePublisher.shared.attach(appState)
-        ESP32BridgeManager.shared.onFocusRequest = { [weak appState] mascot in
-            guard let appState else { return }
-            ESP32FocusCoordinator.handle(mascot: mascot, appState: appState)
-        }
-        let buddyEnabled = UserDefaults.standard.bool(forKey: SettingsKey.esp32BridgeEnabled)
-        let buddySyncInterval = UserDefaults.standard.double(forKey: SettingsKey.esp32HeartbeatSeconds)
-        let buddyBrightness = UserDefaults.standard.double(forKey: SettingsKey.buddyScreenBrightnessPercent)
-        let buddyScreenOrientation = BuddyScreenOrientation(
-            settingsValue: UserDefaults.standard.string(forKey: SettingsKey.buddyScreenOrientation)
-        )
-        ESP32StatePublisher.shared.configure(
-            enabled: buddyEnabled,
-            heartbeatSeconds: buddySyncInterval > 0 ? buddySyncInterval : SettingsDefaults.esp32HeartbeatSeconds,
-            brightnessPercent: buddyBrightness > 0 ? buddyBrightness : SettingsDefaults.buddyScreenBrightnessPercent,
-            screenOrientation: buddyScreenOrientation
-        )
+        // Watch system sleep/wake so the mascot animations pause and re-anchor
+        // their periodic schedules instead of pinning a core after wake (#225).
+        MascotAnimationGate.shared.start()
 
         // Hooks auto-recovery: periodic + app activation trigger
         hookRecoveryTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
@@ -148,7 +132,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         guard !bindings.isEmpty else { return }
 
-        let handler: (NSEvent) -> Bool = { [weak self] event in
+        // Global path: Carbon RegisterEventHotKey fires from any frontmost app
+        // and — unlike an NSEvent global keyboard monitor — needs no
+        // Accessibility permission. This is the primary handler. See #217.
+        for b in bindings {
+            hotKeyManager.register(keyCode: b.keyCode, modifiers: b.mods) { [weak self] in
+                Task { @MainActor in self?.executeShortcut(b.action) }
+            }
+        }
+
+        // Local monitor: same-app fallback so the shortcut still works (and is
+        // swallowed) while CodeIsland's own panel/settings window is focused.
+        let localHandler: (NSEvent) -> Bool = { [weak self] event in
             let eventMods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             for b in bindings where event.keyCode == b.keyCode && eventMods == b.mods {
                 Task { @MainActor in self?.executeShortcut(b.action) }
@@ -156,19 +151,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return false
         }
-
-        globalShortcutMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
-            _ = handler(event)
-        }
         localShortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            handler(event) ? nil : event
+            localHandler(event) ? nil : event
         }
     }
 
     private func teardownGlobalShortcut() {
-        if let m = globalShortcutMonitor { NSEvent.removeMonitor(m) }
+        hotKeyManager.unregisterAll()
         if let m = localShortcutMonitor { NSEvent.removeMonitor(m) }
-        globalShortcutMonitor = nil
         localShortcutMonitor = nil
     }
 

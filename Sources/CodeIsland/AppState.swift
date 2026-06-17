@@ -580,7 +580,6 @@ final class AppState {
         } else {
             rotatingSessionId = cachedActiveIds.first
         }
-        ESP32StatePublisher.shared.notifyDirty()
     }
 
     /// Start monitoring the CLI process for a session.
@@ -877,7 +876,6 @@ final class AppState {
         if primarySource != summary.primarySource { primarySource = summary.primarySource }
         if activeSessionCount != summary.activeSessionCount { activeSessionCount = summary.activeSessionCount }
         if totalSessionCount != summary.totalSessionCount { totalSessionCount = summary.totalSessionCount }
-        ESP32StatePublisher.shared.notifyDirty()
     }
 
     private func refreshProviderTitle(for trackedSessionId: String, providerSessionId: String? = nil) {
@@ -1019,6 +1017,11 @@ final class AppState {
         let permissionCountBefore = permissionQueue.lazy.filter { $0.event.sessionId == sessionId }.count
         cachePreToolUseIfApplicable(event)
         resolveToolUseIfCompleted(event)
+        // #216: permission requests with no correlatable tool_use_id can't be drained by
+        // resolveToolUseIfCompleted. A follow-up activity event means the user already
+        // approved in the terminal — resume those (and only those) as approved. Counted
+        // toward permissionCountAfter below so the surgical-drain guard accounts for it.
+        resolveOrphanPermissionsOnActivity(event)
         let permissionCountAfter = permissionQueue.lazy.filter { $0.event.sessionId == sessionId }.count
         let surgicallyDrained = permissionCountAfter < permissionCountBefore
 
@@ -1194,6 +1197,16 @@ final class AppState {
         let responseData: Data
         if always {
             let toolName = pending.event.toolName ?? ""
+            // MCP tools (`mcp__server__tool`) don't accept a rule specifier — the
+            // rule must be the bare tool name. Sending `ruleContent: "*"` makes
+            // Claude Code assemble `mcp__server__tool(*)`, which never matches an
+            // actual MCP call, so the "always allow" rule silently fails to
+            // persist and the same approval keeps re-prompting. Non-MCP tools
+            // (Bash/Read/Edit/…) keep the `*` specifier. (#224)
+            var rule: [String: Any] = ["toolName": toolName]
+            if !toolName.hasPrefix("mcp__") {
+                rule["ruleContent"] = "*"
+            }
             let obj: [String: Any] = [
                 "hookSpecificOutput": [
                     "hookEventName": "PermissionRequest",
@@ -1201,7 +1214,7 @@ final class AppState {
                         "behavior": "allow",
                         "updatedPermissions": [[
                             "type": "addRules",
-                            "rules": [["toolName": toolName, "ruleContent": "*"]],
+                            "rules": [rule],
                             "behavior": "allow",
                             "destination": "session"
                         ]]
@@ -1467,7 +1480,22 @@ final class AppState {
 
     func answerQuestion(_ answer: String) {
         guard !questionQueue.isEmpty else { return }
-        if questionQueue[0].isFromPermission, questionQueue[0].askUserQuestionState != nil {
+        // Multi-question wizards (AskUserQuestion, Codex app-server) use the batch
+        // path — direct single answers are not processed here.
+        if questionQueue[0].askUserQuestionState != nil,
+           (questionQueue[0].isFromPermission || questionQueue[0].isCodexAppServer) {
+            return
+        }
+        // Codex app-server questions reply over the JSON-RPC client, not a hook.
+        if questionQueue[0].isCodexAppServer {
+            let pending = questionQueue.removeFirst()
+            let answerKey = pending.askUserQuestionState?.items.first?.answerKey
+                ?? pending.question.header ?? "answer"
+            pending.resolveCodexAppServer([answerKey: [answer]])
+            let sessionId = pending.event.sessionId ?? "default"
+            sessions[sessionId]?.status = .processing
+            showNextPending()
+            refreshDerivedState()
             return
         }
         let pending = questionQueue.removeFirst()
@@ -1500,7 +1528,7 @@ final class AppState {
             ]
             responseData = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
         }
-        pending.continuation.resume(returning: responseData)
+        pending.resolution.resumeHook(returning: responseData)
         let sessionId = pending.event.sessionId ?? "default"
         sessions[sessionId]?.status = .processing
 
@@ -1510,6 +1538,26 @@ final class AppState {
 
     func answerQuestionMulti(_ answers: [(question: String, answer: String)]) {
         guard !questionQueue.isEmpty else { return }
+        // Codex app-server questions reply over the JSON-RPC client, not a hook.
+        if questionQueue[0].isCodexAppServer {
+            let pending = questionQueue.removeFirst()
+            var answersByKey: [String: [String]] = [:]
+            if let askState = pending.askUserQuestionState {
+                // Match by position — the wizard collects answers in item order.
+                for (index, item) in askState.items.enumerated() where index < answers.count {
+                    answersByKey[item.answerKey] = [answers[index].answer]
+                }
+            } else {
+                let answerKey = pending.question.header ?? "answer"
+                answersByKey[answerKey] = [answers.first?.answer ?? ""]
+            }
+            pending.resolveCodexAppServer(answersByKey)
+            let sessionId = pending.event.sessionId ?? "default"
+            sessions[sessionId]?.status = .processing
+            showNextPending()
+            refreshDerivedState()
+            return
+        }
         let pending = questionQueue.removeFirst()
         let responseData: Data
         if pending.isFromPermission {
@@ -1550,7 +1598,7 @@ final class AppState {
             ]
             responseData = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
         }
-        pending.continuation.resume(returning: responseData)
+        pending.resolution.resumeHook(returning: responseData)
         let sessionId = pending.event.sessionId ?? "default"
         sessions[sessionId]?.status = .processing
 
@@ -1585,7 +1633,13 @@ final class AppState {
     func dismissQuestion() {
         guard !questionQueue.isEmpty else { return }
         let pending = questionQueue.removeFirst()
-        pending.continuation.resume(returning: Data("{}".utf8))
+        if pending.isCodexAppServer {
+            // No "dismiss" verb in the Codex protocol — abandon the request so the
+            // server stops waiting (it will re-prompt or fall back to its TUI).
+            pending.resolveCodexAppServer(nil)
+        } else {
+            pending.resolution.resumeHook(returning: Data("{}".utf8))
+        }
         let sessionId = pending.event.sessionId ?? "default"
         sessions[sessionId]?.status = .processing
 
@@ -1646,13 +1700,16 @@ final class AppState {
     private func drainQuestions(forSession sessionId: String) {
         questionQueue.removeAll { item in
             guard item.event.sessionId == sessionId else { return false }
-            if item.isFromPermission {
+            if item.isCodexAppServer {
+                // Abandon the Codex app-server request so the server stops waiting.
+                item.resolveCodexAppServer(nil)
+            } else if item.isFromPermission {
                 let denyData = Data(
                     #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#.utf8
                 )
-                item.continuation.resume(returning: denyData)
+                item.resolution.resumeHook(returning: denyData)
             } else {
-                item.continuation.resume(returning: Data("{}".utf8))
+                item.resolution.resumeHook(returning: Data("{}".utf8))
             }
             return true
         }

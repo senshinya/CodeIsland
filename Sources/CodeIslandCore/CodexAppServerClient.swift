@@ -243,6 +243,18 @@ public final class CodexAppServerClient: @unchecked Sendable {
         try writeEnvelope(body)
     }
 
+    /// Reply to a server-to-client JSON-RPC *request* (the server sends these for
+    /// e.g. `item/tool/requestUserInput`). The `id` must echo the request's id.
+    /// `result` is JSON-serializable (Dictionary/Array/scalar) or nil for `{}`.
+    public func sendResponse(id: CodexRequestID, result: Any?) throws {
+        let body: [String: Any] = [
+            "jsonrpc": "2.0",
+            "id": id.jsonValue,
+            "result": result ?? [String: Any](),
+        ]
+        try writeEnvelope(body)
+    }
+
     /// Send `initialize` with a minimal ClientInfo payload. Codex always expects
     /// this before any other thread / turn calls will work.
     @discardableResult
