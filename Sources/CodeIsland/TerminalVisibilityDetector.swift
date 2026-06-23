@@ -11,6 +11,7 @@ import CodeIslandCore
 ///   Uses AppleScript or CLI calls that may block 50-200ms. Call from background thread only.
 ///
 /// Supported tab-level detection:
+/// - Otty: focused-tab CWD match via `otty tab show`
 /// - iTerm2: session ID match
 /// - Ghostty: CWD match via System Events window title
 /// - Terminal.app: TTY match on selected tab
@@ -85,6 +86,9 @@ struct TerminalVisibilityDetector {
         // Route by bundle ID first (precise), then by TERM_PROGRAM (fallback).
         // This avoids misrouting Warp (TERM_PROGRAM=Apple_Terminal) to Terminal.app.
         let bid = session.termBundleId?.lowercased() ?? ""
+        if bid == "io.appmakes.otty" {
+            return isOttyTabActive(session)
+        }
         if bid.contains("iterm2") || bid.contains("iterm") {
             return isITermSessionActive(session)
         }
@@ -109,6 +113,7 @@ struct TerminalVisibilityDetector {
             let lower = termApp.lowercased()
                 .replacingOccurrences(of: ".app", with: "")
                 .replacingOccurrences(of: "apple_", with: "")
+            if lower == "otty" { return isOttyTabActive(session) }
             if lower.contains("iterm") { return isITermSessionActive(session) }
             if lower == "ghostty" { return isGhosttyTabActive(session) }
             if lower.contains("wezterm") || lower.contains("wez") { return isWezTermTabActive(session) }
@@ -276,6 +281,53 @@ struct TerminalVisibilityDetector {
         }
 
         return false
+    }
+
+    // MARK: - Otty
+
+    private struct OttyShowResult: Decodable {
+        let data: OttyShowInfo
+    }
+
+    private struct OttyShowInfo: Decodable {
+        let id: String?
+        let cwd: String?
+    }
+
+    /// Check if the session is in Otty's currently focused tab. When the bridge
+    /// captured the exact pane id at SessionStart, compare it against the focused
+    /// pane's id (precise). Otherwise fall back to matching the focused tab's CWD.
+    /// `otty {pane,tab} show` (no arg) returns the focused pane/tab; pane-level
+    /// `active` is unreliable (true for every pane within its own tab), so tab/pane
+    /// identity from `show` is the correct signal.
+    private static func isOttyTabActive(_ session: SessionSnapshot) -> Bool {
+        guard let bin = findOttyBinary() else { return false }
+
+        // Precise path: focused pane id must equal the bound id.
+        if let paneId = session.ottyPaneId, !paneId.isEmpty {
+            guard let data = runProcess(bin, args: ["pane", "show", "--json"]),
+                  let result = try? JSONDecoder().decode(OttyShowResult.self, from: data) else { return false }
+            return result.data.id == paneId
+        }
+
+        // Fallback: focused tab cwd must equal the session cwd.
+        guard let cwd = session.cwd, !cwd.isEmpty else { return false }
+        guard let data = runProcess(bin, args: ["tab", "show", "--json"]),
+              let result = try? JSONDecoder().decode(OttyShowResult.self, from: data),
+              let tabCwd = result.data.cwd else { return false }
+        return normalizeOttyPath(tabCwd) == normalizeOttyPath(cwd)
+    }
+
+    private static func normalizeOttyPath(_ value: String) -> String {
+        value.hasPrefix("file://") ? (URL(string: value)?.path ?? value) : value
+    }
+
+    private static func findOttyBinary() -> String? {
+        let candidates = [
+            "/Applications/Otty.app/Contents/MacOS/otty-cli",
+            NSHomeDirectory() + "/Applications/Otty.app/Contents/MacOS/otty-cli",
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
     // MARK: - kitty

@@ -348,6 +348,31 @@ if let supersetPane = env["SUPERSET_PANE_ID"] ?? env["SUPERSET_TERMINAL_ID"], !s
     json["_superset_pane_id"] = supersetPane
 }
 
+// Otty — unlike iTerm/kitty/wezterm it exports no per-pane env var, and its control
+// CLI resolves "current" to the *focused* pane, so a process can't learn its own pane
+// id directly. At SessionStart, though, this pane is the one the user just ran `claude`
+// in (hence focused), so `otty pane show` returns it. Capture that pane id, guarded by a
+// cwd match so we never bind to some other tab that happens to be focused. Gated to
+// SessionStart to keep the per-hook hot path free of this subprocess call.
+if eventName == "SessionStart",
+   env["__CFBundleIdentifier"] == "io.appmakes.otty" || env["TERM_PROGRAM"] == "otty" {
+    let ottyBin = env["OTTY_BIN_DIR"].map { "\($0)/otty" } ?? "/Applications/Otty.app/Contents/MacOS/otty-cli"
+    let stripScheme: (String) -> String = { $0.hasPrefix("file://") ? String($0.dropFirst(7)) : $0 }
+    let stripSlash: (String) -> String = { $0.count > 1 && $0.hasSuffix("/") ? String($0.dropLast()) : $0 }
+    if access(ottyBin, X_OK) == 0,
+       let out = runCommand(ottyBin, args: ["--timeout", "1500", "pane", "show", "--json"]),
+       let data = out.data(using: .utf8),
+       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+       let pane = obj["data"] as? [String: Any],
+       let paneId = nonEmptyString(pane["id"]) {
+        let sessionCwd = nonEmptyString(json["cwd"]) ?? nonEmptyString(env["PWD"])
+        let paneCwd = nonEmptyString(pane["cwd"]).map { stripSlash(stripScheme($0)) }
+        if let sc = sessionCwd.map(stripSlash), let pc = paneCwd, sc == pc {
+            json["_otty_pane_id"] = paneId
+        }
+    }
+}
+
 // Source tag (e.g. "codex" when called via --source codex)
 if let source = sourceTag {
     json["_source"] = source

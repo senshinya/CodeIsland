@@ -14,6 +14,7 @@ struct TerminalActivator {
 
     private static let knownTerminals: [(name: String, bundleId: String)] = [
         ("cmux", "com.cmuxterm.app"),
+        ("Otty", "io.appmakes.otty"),
         ("Ghostty", "com.mitchellh.ghostty"),
         ("iTerm2", "com.googlecode.iterm2"),
         ("Kaku", "fun.tw93.kaku"),
@@ -144,6 +145,12 @@ struct TerminalActivator {
 
         if lower.contains("cmux") {
             activateCmux(surfaceId: session.cmuxSurfaceId, workspaceId: session.cmuxWorkspaceId)
+            return
+        }
+
+        // --- Otty (control CLI: `otty pane focus` by captured id, else `tab` by cwd) ---
+        if lower == "otty" || effectiveBundleId == "io.appmakes.otty" {
+            activateOtty(paneId: session.ottyPaneId, cwd: session.cwd)
             return
         }
 
@@ -675,6 +682,59 @@ struct TerminalActivator {
         }
     }
 
+    // MARK: - Otty (control CLI: `otty tab list/focus`, matched by cwd)
+
+    private struct OttyTabList: Decodable {
+        let data: [OttyTab]
+    }
+
+    private struct OttyTab: Decodable {
+        let id: String
+        let cwd: String?
+        // In `tab list`, exactly one tab is `active: true` — the focused tab.
+        // (Note: in `pane list`, `active` is per-tab and true for every pane,
+        // so it can't be used the same way — tabs are the right granularity.)
+        let active: Bool?
+    }
+
+    /// Bring Otty forward and jump to the session's tab. Prefer the exact pane id
+    /// captured by the bridge at SessionStart (`pane focus` switches the visible tab,
+    /// even across split panes); fall back to cwd-matching the tab when no id was
+    /// captured (e.g. CodeIsland launched mid-session). Otty exposes no per-pane env
+    /// var or tty, so cwd is the only fallback signal — same limitation as Warp.
+    /// The `otty tab list --json` output is wrapped in `{ "data": [...] }`.
+    private static func activateOtty(paneId: String?, cwd: String?) {
+        activateByBundleId("io.appmakes.otty")
+
+        guard let bin = findBinary("otty", extraPaths: [
+            "/Applications/Otty.app/Contents/MacOS/otty-cli",
+            NSHomeDirectory() + "/Applications/Otty.app/Contents/MacOS/otty-cli",
+        ]) else { return }
+
+        // Precise path: focus the exact pane bound at SessionStart.
+        if let paneId = paneId, !paneId.isEmpty {
+            DispatchQueue.global(qos: .userInitiated).async {
+                _ = runProcess(bin, args: ["pane", "focus", paneId])
+            }
+            return
+        }
+
+        // Fallback: match a tab by cwd.
+        guard let cwd = cwd, !cwd.isEmpty else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let data = runProcess(bin, args: ["tab", "list", "--json"]),
+                  let list = try? JSONDecoder().decode(OttyTabList.self, from: data) else { return }
+
+            let normalizedCwd = normalizeFileURLPath(cwd)
+            let matches = list.data.filter { normalizeFileURLPath($0.cwd) == normalizedCwd }
+            // Prefer a non-focused match (the tab we actually want to jump to);
+            // if the only cwd match is already focused, there's nothing to switch.
+            guard let target = matches.first(where: { !($0.active ?? false) }) ?? matches.first,
+                  !(target.active ?? false) else { return }
+            _ = runProcess(bin, args: ["tab", "focus", target.id])
+        }
+    }
+
     private static func activateWezTerm(ttyPath: String?, cwd: String?) {
         bringToFront("WezTerm")
         guard let bin = findBinary("wezterm") else { return }
@@ -955,6 +1015,7 @@ struct TerminalActivator {
         let name: String
         let lower = termApp.lowercased()
         if lower.contains("cmux") { name = "cmux" }
+        else if lower == "otty" { name = "Otty" }
         else if lower == "ghostty" { name = "Ghostty" }
         else if lower.contains("iterm") { name = "iTerm2" }
         else if lower.contains("terminal") || lower.contains("apple_terminal") { name = "Terminal" }
